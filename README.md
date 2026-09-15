@@ -553,12 +553,12 @@ TypeScript settings worth knowing: `strict`, `noUncheckedIndexedAccess`,
 `module: NodeNext`. The engine (`src/core`, `src/types`, `src/providers`, `src/adapters`,
 `src/audit`) has **no dependency on the harness**; only `src/dsh/` knows about Cordis, and it
 does so through the narrow structural interfaces in `src/dsh/context.ts`. That is what makes
-the whole engine testable without a runtime. The suite is 148 tests across 8 files and passes
+the whole engine testable without a runtime. The suite is 152 tests across 8 files and passes
 as committed:
 
 ```sh
 node --test tests/*.test.js
-# tests 148 / suites 27 / pass 148 / fail 0
+# tests 152 / suites 27 / pass 152 / fail 0
 ```
 
 ```sh

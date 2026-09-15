@@ -21,11 +21,11 @@ Requirements: Node `>= 20.11.0` and TypeScript `^5.7`. The tests import from `li
 once. `npm run verify:artifacts` is cheap and is worth running before a commit that touches
 `src/types/metrics.ts`, `src/core/presets.ts` or the package entry.
 
-The committed suite is 148 tests across eight files:
+The committed suite is 152 tests across eight files:
 
 ```sh
 node --test tests/*.test.js
-# tests 148 / suites 27 / pass 148 / fail 0
+# tests 152 / suites 27 / pass 152 / fail 0
 ```
 
 ### Regenerating the preset documents

@@ -108,7 +108,7 @@ diff against an earlier version.
   exports the plugin contract, that no built file imports a `.ts` specifier, that every
   canonical metric resolves through `metricDescriptor`, that the preset ladder is ordered, and
   that `resolveConfig` rejects an inverted band and a non-canonical metric name.
-- **Tests**: 148 tests across eight files — metric registry and normalization, band arithmetic
+- **Tests**: 152 tests across eight files — metric registry and normalization, band arithmetic
   and the sustain gate, rolling windows (including daily summaries) and trend analysis, the
   action ladder and anti-flapping policy, maintenance phases and safe-point folding, the six
   design scenarios driven end to end, the plugin entry point and its three tools, and the

@@ -7,7 +7,7 @@ that actually verify them. Every test name below is real and the suite passes as
 
 ```sh
 node --test tests/*.test.js
-# tests 148 / suites 27 / pass 148 / fail 0
+# tests 152 / suites 27 / pass 152 / fail 0
 ```
 
 Test files:

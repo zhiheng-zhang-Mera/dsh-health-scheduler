@@ -498,11 +498,11 @@ npm run verify:artifacts   # 校验构建产物与预设彼此一致
 只有 `src/dsh/` 知道 Cordis，而且是通过 `src/dsh/context.ts` 里那些窄结构接口知道的。这正是整个
 引擎无需运行时即可测试的原因。
 
-测试套件共 148 个测试、分布在 8 个文件中，按提交状态全部通过：
+测试套件共 152 个测试、分布在 8 个文件中，按提交状态全部通过：
 
 ```sh
 node --test tests/*.test.js
-# tests 148 / suites 27 / pass 148 / fail 0
+# tests 152 / suites 27 / pass 152 / fail 0
 ```
 
 ```sh
