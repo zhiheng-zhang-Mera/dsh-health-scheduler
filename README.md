@@ -456,7 +456,7 @@ The plugin degrades; it does not fail. Each of these is a normal, well-typed out
 
 | Situation | What happens |
 | --- | --- |
-| `dsh-restart` is not installed | `UnavailableRestartAdapter` reports `capability: 'unavailable'`. Monitoring and throttling continue. A restart decision is downgraded to `PAUSE_NEW_WORK` with reason `restart_capability_unavailable`. |
+| `dsh-restart` is not installed, or reports itself unusable | `UnavailableRestartAdapter` reports `capability: 'unavailable'`. Monitoring and throttling continue. A restart decision is downgraded to `PAUSE_NEW_WORK` with reason `restart_capability_unavailable`. A `dsh-restart` whose configuration disables every restart mode reports `unavailable` too, rather than accepting requests it could never carry out. |
 | No worker-control service is bound | `UnavailableWorkerControlAdapter` reports `unavailable`. A `THROTTLE` attempt returns `applied: false` with a detail explaining it; the tick continues. |
 | A provider throws | That provider only is disabled for an exponential backoff (`providerBackoffMs * 2^steps`, capped at `providerBackoffMaxMs`, starting once consecutive failures reach `providerFailureLimit`). Its metrics simply stop arriving and become `unknown`. |
 | A provider returns `degraded: true` | The metrics it *did* measure stay authoritative; the note is surfaced in the snapshot's `warnings`. |
@@ -533,13 +533,14 @@ answers `accepted: false` with `CHECKPOINT_FAILED` or `SUPERVISOR_ABSENT`, that 
 recorded verbatim in the audit log and the action is reported as not applied — this
 plugin does not retry around a refusal.
 
-> **Two ways to hand it over.** Passing `restart` into the scheduler (above) is the
-> supported one. The plugin's own `apply` also opportunistically looks for an object
-> named `healthScheduler` on the harness context and uses it if it structurally matches
-> `RestartAdapter`; that is a convenience for a composition that already publishes one,
-> not a contract, and `dsh-restart` does not publish anything under that name today. If
-> neither is present, `UnavailableRestartAdapter` is used and the plugin says so — it
-> monitors and throttles, and a restart decision is downgraded with reason
+> **Two ways to hand it over, and they agree.** `dsh-restart` publishes its adapter on
+> the harness context as `ctx.healthScheduler` when its `apply` runs, and this plugin's
+> own `apply` reads exactly that name and uses it when it structurally matches
+> `RestartAdapter`. So a profile that lists both bundles wires itself: no glue script, no
+> extra configuration. Passing `restart` into `new HealthScheduler(...)` directly is the
+> other way, and is what you use when you compose the scheduler yourself. If neither is
+> present, `UnavailableRestartAdapter` is used and the plugin says so — it monitors and
+> throttles, and a restart decision is downgraded with reason
 > `restart_capability_unavailable`.
 
 **3. Register the safe point.** A thin provider that answers for the harness kernel is

@@ -484,4 +484,116 @@ describe('scheduler clock discipline', () => {
     assert.ok(time.score !== null && time.score > 50, `time dimension scored ${time.score}`)
     assert.ok(rig.last.drivers.some((driver) => driver.code === 'uptime_pressure'))
   })
+
+  it('reads process uptime fresh on every sample, so the time dimension can actually rise', async () => {
+    const { defaultEnvironment } = await import('../lib/providers/environment.js')
+    const environment = defaultEnvironment()
+    const first = environment.process.uptimeSeconds
+    // The process facade has to be a read-through, not a snapshot taken at construction:
+    // a frozen uptime would pin the `time` dimension — weight 0.15 and the design's
+    // long-uptime maintenance driver — at whatever value the process had when the plugin
+    // loaded, forever.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    const second = environment.process.uptimeSeconds
+    assert.ok(
+      second > first,
+      `uptime did not advance: ${first} -> ${second}. The process facade is being snapshotted.`,
+    )
+  })
+
+  it('acknowledges a system reboot only on the rung that reboots', async () => {
+    const rig = new ScenarioRig({
+      config: {
+        thresholds: {
+          throttle: { enter: 5, exit: 2 },
+          pause_new_work: { enter: 25, exit: 20 },
+          request_app_restart: { enter: 40, exit: 35 },
+          request_system_reboot: { enter: 90, exit: 85 },
+        },
+        antiFlap: { debounceEvaluations: 1, minStateDwellMs: 0, minRepeatActionMs: 0 },
+        maintenance: { enabled: true, safePointRequired: false },
+      },
+    })
+    try {
+      const hardware = rig.provider('hardware', 'hardware', ['gpu_temp_c'])
+      hardware.set({ gpu_temp_c: 60 })
+      await rig.advance(MINUTE, 2)
+      // 96 °C saturates the 78..92 band, so the lone measured dimension renormalizes to
+      // 100 and the *top* rung is what fires — which is the rung whose acknowledgement
+      // this test is about. The band carries a 60 s sustain gate, so the condition has to
+      // hold that long before it scores at all.
+      hardware.set({ gpu_temp_c: 96 })
+      await rig.advance(2 * MINUTE, 10)
+      assert.equal(rig.last.pressure, 100, 'the saturated lone metric should read 100')
+      // The request is raised on the tick the pressure crosses the top rung, so by the end
+      // of the window the state has already moved on to waiting for a safe point.
+      assert.ok(
+        ['REQUEST_SYSTEM_REBOOT', 'ESCALATION_PENDING'].includes(rig.last.state),
+        `state was ${rig.last.state}`,
+      )
+      assert.ok(
+        rig.restart.requests.some((request) => request.mode === 'system'),
+        `expected a system restart request, saw ${JSON.stringify(rig.restart.requests.map((r) => r.mode))}`,
+      )
+
+      assert.ok(rig.restart.requests.length > 0, 'the scenario should have produced a restart request')
+      for (const request of rig.restart.requests) {
+        if (request.mode === 'system') {
+          assert.equal(
+            request.acknowledgeSystemReboot,
+            true,
+            'a system request must acknowledge the reboot, or the restart plugin refuses it with SYSTEM_REBOOT_NOT_PERMITTED',
+          )
+        } else {
+          assert.equal(
+            request.acknowledgeSystemReboot,
+            undefined,
+            'an application request must never carry the reboot acknowledgement',
+          )
+        }
+      }
+    } finally {
+      rig.scheduler.stop()
+    }
+  })
+
+  it('does not consult a safe point at all when the configuration says it is not required', async () => {
+    const rig = new ScenarioRig({
+      config: {
+        thresholds: {
+          throttle: { enter: 5, exit: 2 },
+          pause_new_work: { enter: 10, exit: 6 },
+          request_app_restart: { enter: 15, exit: 12 },
+          request_system_reboot: { enter: 101, exit: 99 },
+        },
+        antiFlap: { debounceEvaluations: 1, minStateDwellMs: 0, minRepeatActionMs: 0 },
+        maintenance: { enabled: true, safePointRequired: false },
+      },
+    })
+    try {
+      // An empty registry answers `safe: null` when asked, and the policy engine treats
+      // that as unsafe. `safePointRequired: false` therefore has to mean the gate is
+      // skipped, not that the question is asked and answered badly — otherwise the
+      // setting blocks every restart instead of enabling one.
+      rig.provider('hardware', 'hardware', ['gpu_temp_c']).set({ gpu_temp_c: 96 })
+      await rig.advance(2 * MINUTE, 10)
+      assert.equal(rig.last.pressure, 100, 'the saturated lone metric should read 100')
+
+      assert.ok(
+        rig.restart.applicationRequests.length > 0,
+        `expected an application restart request, saw none; state ${rig.last.state}, pressure ${rig.last.pressure}, warnings ${JSON.stringify(rig.last.warnings)}`,
+      )
+
+      assert.equal(rig.last.readiness.reason, 'not_evaluated')
+      for (const record of rig.decisions) {
+        assert.equal(
+          record.reasons.some((reason) => reason.startsWith('safe_point_unsafe') || reason === 'safe_point_unknown'),
+          false,
+          `a skipped gate must not appear as a block: ${record.reasons.join(', ')}`,
+        )
+      }
+    } finally {
+      rig.scheduler.stop()
+    }
+  })
 })

@@ -35,6 +35,14 @@ export interface RestartRequest {
   readonly checkpointRequired: boolean
   /** Priority hint. */
   readonly priority: 'low' | 'normal' | 'high' | 'emergency'
+  /**
+   * Explicit acknowledgement that this request may reboot the machine.
+   *
+   * Required by `dsh-restart` for `mode: 'system'`, and set here only for that mode:
+   * a request that escalates to a reboot says so, and an application restart never
+   * carries the flag, so a mode change cannot smuggle a reboot through.
+   */
+  readonly acknowledgeSystemReboot?: boolean
 }
 
 /** The restart side's answer. */

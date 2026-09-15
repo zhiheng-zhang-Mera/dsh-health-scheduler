@@ -7,13 +7,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- Nothing yet.
-
 ### Fixed
 
-- Nothing yet.
+- **The two plugins can now actually talk to each other.** `dsh-restart` publishes its
+  adapter on `ctx.healthScheduler` when its `apply` runs, and this plugin's `apply` reads
+  exactly that name, so a profile that lists both bundles wires itself. Before this the
+  structural check rejected a manager handed over directly (it has no `capability` field),
+  silent fallback to `UnavailableRestartAdapter` followed, and levels 3 and 4 were
+  permanently downgraded to `PAUSE_NEW_WORK` with `restart_capability_unavailable` — a
+  failure that looked like a policy choice rather than a missing wire.
+- **A system-reboot request carries `acknowledgeSystemReboot`.** `dsh-restart` requires
+  that field explicitly for `mode: system`; without it the top rung was refused with
+  `SYSTEM_REBOOT_NOT_PERMITTED`, so the escalation path existed in the policy and nowhere
+  else. Application requests never carry the flag, so a mode change cannot smuggle a reboot
+  through.
+- **`maintenance.safePointRequired: false` now skips the gate.** It was passing an
+  "asked and unanswered" reading where the policy engine wants `null` to mean "do not ask",
+  so the setting blocked every restart with `safe_point_unknown` instead of opting out.
+- **Process uptime is read fresh on every sample.** The process facade was snapshotted at
+  construction, freezing `uptime_seconds` — and therefore the whole `time` dimension,
+  weight 0.15 and the design's long-uptime maintenance driver — at whatever the process
+  reported when the plugin loaded.
 
 ## [0.1.0] - 2026-01-01
 
@@ -108,7 +122,7 @@ diff against an earlier version.
   exports the plugin contract, that no built file imports a `.ts` specifier, that every
   canonical metric resolves through `metricDescriptor`, that the preset ladder is ordered, and
   that `resolveConfig` rejects an inverted band and a non-canonical metric name.
-- **Tests**: 152 tests across eight files — metric registry and normalization, band arithmetic
+- **Tests**: 155 tests across eight files — metric registry and normalization, band arithmetic
   and the sustain gate, rolling windows (including daily summaries) and trend analysis, the
   action ladder and anti-flapping policy, maintenance phases and safe-point folding, the six
   design scenarios driven end to end, the plugin entry point and its three tools, and the

@@ -51,7 +51,14 @@ export interface ProviderEnvironment {
   readonly clock: () => number
   /** `node:os` facade. */
   readonly os: OsFacade
-  /** Running-process facade. */
+  /**
+   * Running-process facade.
+   *
+   * A getter, not a snapshot: uptime, RSS and handle counts change between ticks, and
+   * a provider that reads a value captured at construction would report the uptime the
+   * process had when the plugin loaded, forever. The `runtime` provider's whole time
+   * dimension depends on this being current.
+   */
   readonly process: ProcessFacade
   /** Directory the plugin may write scratch state into, or `null`. */
   readonly stateDirectory: string | null
@@ -75,8 +82,10 @@ function activeResources(): { handles: number | null; requests: number | null } 
 
 /** Build the real environment from Node's own modules. */
 export function defaultEnvironment(options: { stateDirectory?: string | null } = {}): ProviderEnvironment {
-  const memory = nodeProcess.memoryUsage()
-  const { handles, requests } = activeResources()
+  const fixed: Omit<ProcessFacade, 'uptimeSeconds' | 'rssBytes' | 'heapUsedBytes' | 'externalBytes' | 'activeHandles' | 'activeRequests'> = {
+    pid: nodeProcess.pid,
+    treeRssBytes: null,
+  }
   return {
     clock: () => Date.now(),
     os: {
@@ -90,27 +99,23 @@ export function defaultEnvironment(options: { stateDirectory?: string | null } =
       hostname: () => nodeOs.hostname(),
       release: () => nodeOs.release(),
     },
-    process: {
-      pid: nodeProcess.pid,
-      uptimeSeconds: nodeProcess.uptime(),
-      rssBytes: memory.rss,
-      heapUsedBytes: memory.heapUsed,
-      externalBytes: memory.external,
-      activeHandles: handles,
-      activeRequests: requests,
-      treeRssBytes: null,
+    // Read through on every access. `uptime_seconds` in particular is the input to the
+    // whole `time` dimension, and a value captured once at construction would freeze it.
+    get process(): ProcessFacade {
+      return readProcessFacade(fixed)
     },
     stateDirectory: options.stateDirectory ?? null,
     runProbe: (config) => runCommandProbe(config),
   }
 }
 
-/** Re-read the volatile process numbers on every sample. */
-export function readProcessFacade(base: ProcessFacade): ProcessFacade {
+/** Read the volatile process numbers now. */
+export function readProcessFacade(base: Partial<ProcessFacade> = {}): ProcessFacade {
   const memory = nodeProcess.memoryUsage()
   const { handles, requests } = activeResources()
   return {
-    ...base,
+    pid: base.pid ?? nodeProcess.pid,
+    treeRssBytes: base.treeRssBytes ?? null,
     uptimeSeconds: nodeProcess.uptime(),
     rssBytes: memory.rss,
     heapUsedBytes: memory.heapUsed,

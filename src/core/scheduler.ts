@@ -359,9 +359,15 @@ export class HealthScheduler {
     this.emit('maintenance', picture)
 
     // 5. Safe-point readiness, only when the configuration can use it.
+    //
+    // `null` means "this deployment does not consult a safe point", and the policy
+    // engine skips the gate entirely. An object whose `safe` is `null` means the
+    // opposite — a source was asked and did not answer — and the policy engine blocks
+    // on it. Building the second from the first would make `safePointRequired: false`
+    // block every restart, which is precisely the setting an operator uses to opt out.
     const readiness = this.config.maintenance.safePointRequired
       ? await this.safePoints.readiness()
-      : { safe: null, reason: 'safe_point_not_required', estimated_state: 'unknown' as const, sources: [], summary: 'not required by configuration' }
+      : null
 
     // 6. Policy.
     const { decision, state } = this.policy.evaluate(
@@ -438,7 +444,14 @@ export class HealthScheduler {
       this.lastTrendAt = nowMs
       this.lastTrends = trends
     }
-    const snapshot = this.buildSnapshot(timestamp, pressureSnapshot, warnings, picture, readiness, trends)
+    const snapshot = this.buildSnapshot(
+      timestamp,
+      pressureSnapshot,
+      warnings,
+      picture,
+      readiness ?? undefined,
+      trends,
+    )
     this.lastSnapshot = snapshot
     this.emit('pressure', pressureSnapshot)
     return snapshot
@@ -613,14 +626,20 @@ export class HealthScheduler {
           }
         }
         this.sequence += 1
+        const systemRestart = action === 'REQUEST_SYSTEM_REBOOT'
         const request: RestartRequest = {
           requestId: `hs-${this.clock()}-${this.sequence}`,
           source: 'dsh-health-scheduler',
-          mode: action === 'REQUEST_APP_RESTART' ? 'application' : 'system',
-          reasonCode: action === 'REQUEST_APP_RESTART' ? 'RUNTIME_PRESSURE' : 'SYSTEM_PRESSURE',
+          mode: systemRestart ? 'system' : 'application',
+          reasonCode: systemRestart ? 'SYSTEM_PRESSURE' : 'RUNTIME_PRESSURE',
           reasonSummary: decision.reasons.join(', '),
           checkpointRequired: this.config.maintenance.safePointRequired,
-          priority: action === 'REQUEST_APP_RESTART' ? 'normal' : 'high',
+          priority: systemRestart ? 'high' : 'normal',
+          // `dsh-restart` requires this for `mode: 'system'`, and requires it to be an
+          // explicit statement rather than an inference from the mode. Without it the
+          // top rung of the ladder is refused with SYSTEM_REBOOT_NOT_PERMITTED, which
+          // means the escalation path exists in the policy and nowhere else.
+          ...(systemRestart ? { acknowledgeSystemReboot: true } : {}),
         }
         try {
           const response =
