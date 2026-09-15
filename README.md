@@ -467,6 +467,87 @@ The plugin degrades; it does not fail. Each of these is a normal, well-typed out
 | No safe-point source is registered | `foldReadiness` returns `safe: null`. With `safePointRequired: true` a restart request is blocked with reason `safe_point_unknown` — an unanswered question is not a `yes`. A source that throws or hangs contributes an `unknown` reading after a 1-second per-source budget. |
 | The settings service or tool runtime is absent | A warning is logged and the plugin runs from the bundle patch alone, or registers no tools. A `ConfigError` from a bad user document is logged and the `balanced` preset is used instead of failing the boot. |
 
+## Paired with `dsh-restart`
+
+The two plugins are separate packages with separate state directories, and nothing in
+either one imports the other. That is deliberate: either can be uninstalled without
+touching the other's code. What connects them is a contract and a directory, and you
+assemble it in three steps.
+
+**1. Point both at the same state directory.** `dsh-restart` writes its ticket,
+heartbeat and ledger there; this plugin reads the ledger to learn whether the
+supervisor has entered safe mode.
+
+```yaml
+# this plugin's row
+- id: health-scheduler
+  name: dsh-health-scheduler
+  config:
+    maintenance:
+      safePointRequired: true
+```
+
+```yaml
+# dsh-restart's row
+- id: restart
+  name: dsh-restart
+  config:
+    safety:
+      checkpointRequired: true
+```
+
+Both default to `$DSH_HOME/restart` and `$DSH_HOME/health-scheduler` respectively when
+no override is given; set `storage.directory` on both if you want them somewhere else.
+The restart plugin's `allowedSources` must include `dsh-health-scheduler`, which it does
+by default.
+
+**2. Give this plugin the two things it cannot make itself.** A restart request is only
+raised when something answers `getMaintenanceReadiness()` and something accepts a
+`RestartRequest`. In production that is the harness kernel (which owns task state and
+therefore owns the safe point) plus `dsh-restart`. In a profile where you have neither
+wired, leave `maintenance.enabled: false` — that is the default — and this plugin will
+throttle and pause rather than pretend it can restart.
+
+To wire them programmatically, provide a `RestartAdapter` — the interface this plugin
+defines and `dsh-restart`'s manager satisfies — when you construct the scheduler:
+
+```ts
+import { HealthScheduler, UnavailableRestartAdapter } from 'dsh-health-scheduler'
+import { RestartManager, TicketStore, RestartAuditLog } from 'dsh-restart'
+
+// `requestApplicationRestart` / `requestSystemRestart` / `cancelPendingRestart` and
+// the `capability` field are the whole contract; the adapter is the four-line bridge.
+const restart = {
+  id: 'dsh-restart',
+  capability: 'available',
+  requestApplicationRestart: (request) => manager.requestApplicationRestart(request),
+  requestSystemRestart: (request) => manager.requestSystemRestart(request),
+  cancelPendingRestart: (requestId) => manager.cancelPendingRestart(requestId),
+}
+```
+
+The `RestartRequest` this plugin builds is the one `dsh-restart` validates field for
+field, including `mode: 'application'`, `reasonCode: 'RUNTIME_PRESSURE'` and
+`checkpointRequired` taken from `maintenance.safePointRequired`. If `dsh-restart`
+answers `accepted: false` with `CHECKPOINT_FAILED` or `SUPERVISOR_ABSENT`, that answer is
+recorded verbatim in the audit log and the action is reported as not applied — this
+plugin does not retry around a refusal.
+
+**3. Register the safe point.** A thin provider that answers for the harness kernel is
+all it takes, and `SafePointRegistry` contains a provider that throws or hangs:
+
+```ts
+scheduler.safePoints.register({
+  id: 'dsh-core',
+  readiness: () => ({ source: 'dsh-core', safe: kernel.isIdle(), reason: kernel.reason(), estimatedState: 'idle' }),
+})
+```
+
+With no source registered, `getMaintenanceReadiness()` returns `safe: null`, and that is
+treated as *not safe*. A restart request with an unanswered safe-point question is
+blocked with reason `safe_point_unknown` rather than proceed — the same rule that makes
+a missing sensor `unknown` rather than healthy.
+
 ## Provider telemetry matrix
 
 Seven provider ids are registered by default. **Be careful with this table**: most of the

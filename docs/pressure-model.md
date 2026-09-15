@@ -286,9 +286,23 @@ const restartPressure = knownWeight > 0
 percentage, and the policy engine appends `coverage_NNpct` to every decision's reason list so
 a low-confidence decision is labelled as such in the audit trail.
 
+**The consequence worth internalizing:** renormalization means the pressure is a statement about
+the dimensions that *have* data, scaled to 0–100. A machine where only `worker` reports, and that
+one dimension scores 100, produces `restart_pressure: 100` with `coverage: 0.15`. That is not a
+bug and it is not an average over the missing dimensions — it is "the one thing we can measure is
+maxed out", and `coverage` plus the `coverage_15pct` reason are what tell an operator how narrow
+the evidence is. Two practical rules follow:
+
+- Read `coverage` before reading `pressure`. A 100 at 0.15 coverage and a 100 at 0.9 coverage are
+  very different claims, and only the second one is about the whole machine.
+- A deployment that wants the pressure to mean "the whole model" should get telemetry into more
+  dimensions rather than raise `weights` on the one that reports; weights are renormalized, so
+  raising one does not make it count for more against the missing ones.
+
 **3. The renormalized share is published.** `DimensionPressure.effectiveWeight` holds the
 weight actually used, so a consumer can see that `thermal` counted for a third of the answer
-rather than a fifth.
+rather than a fifth — and can see, in the same field, that the other dimensions counted for
+nothing at all.
 
 ### Worked example: coverage renormalization
 
