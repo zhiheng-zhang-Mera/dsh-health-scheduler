@@ -533,6 +533,15 @@ answers `accepted: false` with `CHECKPOINT_FAILED` or `SUPERVISOR_ABSENT`, that 
 recorded verbatim in the audit log and the action is reported as not applied — this
 plugin does not retry around a refusal.
 
+> **Two ways to hand it over.** Passing `restart` into the scheduler (above) is the
+> supported one. The plugin's own `apply` also opportunistically looks for an object
+> named `healthScheduler` on the harness context and uses it if it structurally matches
+> `RestartAdapter`; that is a convenience for a composition that already publishes one,
+> not a contract, and `dsh-restart` does not publish anything under that name today. If
+> neither is present, `UnavailableRestartAdapter` is used and the plugin says so — it
+> monitors and throttles, and a restart decision is downgraded with reason
+> `restart_capability_unavailable`.
+
 **3. Register the safe point.** A thin provider that answers for the harness kernel is
 all it takes, and `SafePointRegistry` contains a provider that throws or hangs:
 
