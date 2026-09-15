@@ -126,7 +126,8 @@ Notes:
 ## Workers (and context)
 
 Provider ids **`workers`** and **`context`** (`src/providers/stats-driven.ts`). Pressure
-dimension **`worker`** for all eleven metrics.
+dimension **`worker`** for ten of eleven metrics; **`git_operations_per_minute` is dispatched
+to `time`**, not to `worker`.
 
 | Metric | Unit | Polarity | Hard bounds | Default band | Sustain | Trend | Metric weight |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,7 +154,6 @@ Notes:
 - `git_operations_per_minute` has a weight but neither a band nor a trend term, so it is
   collected, weighted, and **never contributes a point**. It exists as a busy signal for safe
   points; nothing consumes it yet.
-
 ## Computer Use
 
 Provider id **`computer-use`** (`src/providers/stats-driven.ts`). Pressure dimension

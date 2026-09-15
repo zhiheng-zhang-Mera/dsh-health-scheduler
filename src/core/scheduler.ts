@@ -151,6 +151,9 @@ export class HealthScheduler {
   private lastTrendAt = 0
   /** Trends from the last full evaluation, reused between trend intervals. */
   private lastTrends: readonly MetricTrend[] = []
+  /** Memoised daily rollup and the instant it was folded. */
+  private summaryCache: readonly DailySummary[] | null = null
+  private summaryCacheAt = 0
   private state: PolicyState
   /**
    * What the adapters have actually been asked to do, and the cooldowns that
@@ -452,6 +455,22 @@ export class HealthScheduler {
     return this.store.dailySummaries(this.clock())
   }
 
+  /**
+   * Daily summaries for a snapshot, memoised for `sampling.summaryIntervalMs`.
+   *
+   * The fold is cheap but not free, and a snapshot is built on every tick — fifteen
+   * times a minute, for a payload that changes once a day. Keeping the interval an
+   * explicit setting is also what makes it an honest knob rather than a number
+   * nobody reads.
+   */
+  private memoisedDailySummaries(nowMs: number): readonly DailySummary[] {
+    if (this.summaryCache === null || nowMs - this.summaryCacheAt >= this.config.sampling.summaryIntervalMs) {
+      this.summaryCache = this.store.dailySummaries(nowMs)
+      this.summaryCacheAt = nowMs
+    }
+    return this.summaryCache
+  }
+
   /** Remember a failed action attempt for the resolve-later warning. */
   private noteFailure(action: DecisionAction, atMs: number, detail: string): void {
     const previous = this.lastFailure
@@ -671,7 +690,7 @@ export class HealthScheduler {
       trends: trends ?? [],
       metrics,
       recentDecisions: this.log.recent(10),
-      dailySummaries: this.store.dailySummaries(this.clock()),
+      dailySummaries: this.memoisedDailySummaries(this.clock()),
       warnings: [...warnings],
     }
   }

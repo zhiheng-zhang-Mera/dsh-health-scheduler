@@ -296,6 +296,26 @@ describe('restart gate', () => {
     assert.ok(decision.reasons.includes('maintenance_before_target_time'))
   })
 
+  it('blocks a restart when the configuration forbids scheduled restarts', () => {
+    // `allowAppRestart: false` is a maintenance switch, so the module that owns the
+    // maintenance decision is the one that has to honour it.
+    const strict = engine({
+      antiFlap: { debounceEvaluations: 1, minStateDwellMs: 0 },
+      maintenance: { enabled: true, allowAppRestart: false },
+    })
+    const { decision } = decide(
+      strict,
+      input({
+        total: 85,
+        maintenance: maintenance(OPEN_WINDOW),
+        readiness: { safe: true, reason: 'safe_point_reached', estimated_state: 'idle', sources: [], summary: 'idle' },
+      }),
+    )
+    assert.equal(decision.action, ACTIONS.appRestart)
+    assert.equal(decision.effectiveAction, ACTIONS.pause)
+    assert.ok(decision.reasons.includes('maintenance_app_restart_disabled'))
+  })
+
   it('lets an urgent override escalate past the window', () => {
     const { decision } = decide(
       policy,

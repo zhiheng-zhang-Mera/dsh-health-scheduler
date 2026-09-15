@@ -4,7 +4,7 @@
   "sampling": {
     "intervalMs": 15000,
     "trendIntervalMs": 60000,
-    "persistIntervalMs": 300000,
+    "summaryIntervalMs": 300000,
     "providerBackoffMs": 30000,
     "providerBackoffMaxMs": 600000
   },
@@ -388,10 +388,6 @@
     "runtime": {
       "heartbeatFile": null,
       "heartbeatExpectedMs": 15000
-    },
-    "computerUse": {
-      "probeOnTick": false,
-      "probeTimeoutMs": 2000
     },
     "statsFile": {
       "paths": [],

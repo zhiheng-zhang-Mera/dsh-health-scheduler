@@ -426,6 +426,36 @@ export class RollingStore {
     return this.windowSizes.map((windowMs) => this.stats(metric, windowMs, nowMs))
   }
 
+  /**
+   * Fit a trend over the aggregate buckets, for horizons longer than raw retention.
+   *
+   * Raw samples cover `windows.rawMs`; anything longer — a working day, a week of
+   * daily summaries — can only be fitted from the aggregates. Without this the
+   * buckets would be collected and never read, which is how a "24 h leak" ends up
+   * invisible on a machine whose raw horizon is 6 hours.
+   *
+   * @param metric - canonical metric name.
+   * @param horizonMs - look-back horizon.
+   * @param nowMs - evaluation instant.
+   * @returns a least-squares fit in units per hour over bucket means, or `null`.
+   */
+  fitBuckets(
+    metric: CanonicalMetric,
+    horizonMs: number,
+    nowMs: number,
+  ): { readonly slopePerHour: number; readonly rSquared: number; readonly count: number; readonly spanMs: number } | null {
+    const cutoff = nowMs - horizonMs
+    const points = this.buckets(metric)
+      .filter((bucket) => bucket.startMs >= cutoff)
+      .map((bucket) => ({ t: bucket.startMs, v: bucket.mean }))
+    if (points.length < 2) return null
+    const fit = slopePerHour(points)
+    if (fit === null) return null
+    const first = points[0] as RawPoint
+    const last = points[points.length - 1] as RawPoint
+    return { slopePerHour: fit.slope, rSquared: fit.rSquared, count: points.length, spanMs: last.t - first.t }
+  }
+
   /** All metric statistics for one window, sorted by metric name. */
   snapshot(windowMs: number, nowMs: number): readonly WindowStats[] {
     return this.metrics().map((metric) => this.stats(metric, windowMs, nowMs))

@@ -11,15 +11,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Nothing yet.
 
-### Known issues
+### Fixed
 
-- `cordis.patch.yml` is declared by `package.json` (`dsh.bundle.patch`) and listed in `files`,
-  but the file is not present in the repository. Until it is checked in, `dsh plugin add`
-  installs the package as a plain dependency and the plugin does not join a profile's bundle
-  layer stack.
-- `scripts/verify-artifacts.mjs` does not exist, so `npm run verify:artifacts` fails.
-- `npm run presets` is documented in `presets/README.md` but is not defined in `package.json`;
-  use `node scripts/generate-presets.mjs` (or `--check`).
+- Nothing yet.
 
 ## [0.1.0] - 2026-01-01
 
@@ -97,10 +91,28 @@ diff against an earlier version.
   model-facing tools — `health_status` (with `section`: `full` / `pressure` / `maintenance` /
   `providers`), `health_history` (with `metric` and `window_minutes`) and `health_policy` (with
   `action`: `explain` / `config` / `decisions`).
-- **Tests**: 87 tests across six files — metric registry and normalization, band arithmetic and
-  the sustain gate, rolling windows and trend analysis, the action ladder and anti-flapping
-  policy, maintenance phases and safe-point folding, and the six design scenarios driven end to
-  end through the real scheduler.
+- **Bundle packaging**: `cordis.patch.yml` inserting the `health-scheduler` row with the full
+  commented balanced document, so `dsh plugin --profile <name> add dsh-health-scheduler` joins
+  the profile's layer stack; `plugin/manifest.json` plus `plugin/manifest.schema.json`
+  describing id, kind, entry, install command, required and optional services, provided tools
+  and events, action ownership and degradation behaviour.
+- **Daily summaries** (`RollingStore.dailySummaries`): aggregate buckets folded into one
+  `{count, mean, max, min}` per metric per local calendar day, retained for
+  `windows.dailyRetentionMs` (14 days), with means combined by sample count. Published on every
+  `HealthSnapshot` as `dailySummaries` and as `daily_summaries` in the JSON payload.
+- **Generated preset documents and a schema**: `presets/balanced.json`,
+  `presets/conservative.json`, `presets/aggressive.json` and `presets/schema.json`, produced
+  from the build output by `scripts/generate-presets.mjs`, with `npm run presets` to regenerate
+  and `--check` to assert they are current.
+- **`npm run verify:artifacts`** (`scripts/verify-artifacts.mjs`): asserts the package entry
+  exports the plugin contract, that no built file imports a `.ts` specifier, that every
+  canonical metric resolves through `metricDescriptor`, that the preset ladder is ordered, and
+  that `resolveConfig` rejects an inverted band and a non-canonical metric name.
+- **Tests**: 148 tests across eight files — metric registry and normalization, band arithmetic
+  and the sustain gate, rolling windows (including daily summaries) and trend analysis, the
+  action ladder and anti-flapping policy, maintenance phases and safe-point folding, the six
+  design scenarios driven end to end, the plugin entry point and its three tools, and the
+  provider registry, adapters, scheduler and decision log.
 
 ### Notes
 
@@ -110,8 +122,14 @@ diff against an earlier version.
   no dependency on the harness; only `src/dsh/` knows about Cordis, through the narrow
   structural interfaces in `src/dsh/context.ts`.
 - Four configuration keys are accepted, validated and **ignored**:
-  `sampling.persistIntervalMs`, `resilience.reportDegradedCapability`,
+  `sampling.summaryIntervalMs`, `resilience.reportDegradedCapability`,
   `providerOptions.computerUse.probeOnTick` and `providerOptions.computerUse.probeTimeoutMs`.
-- `windows.dailyRetentionMs` is validated but no daily summary rollup exists.
-- On `aggressive`, `thresholds.request_system_reboot.enter` is 109, which a 0–100 pressure can
-  never reach, so level 4 is unreachable through the threshold path on that preset.
+- The `./startup` subpath export points at `./lib/startup.js`, but there is no `src/startup.ts`,
+  so that subpath cannot resolve. Nothing imports it.
+- `cordis.patch.yml` spells one key `minRsquared` while the resolver reads `minRSquared`. The
+  unknown leaf is ignored, so the default `0.5` applies and behaviour is correct, but the line
+  is dead.
+- Preset thresholds are clamped into `1 … 99` when scaled, so no rung can be scaled out of
+  reach. On `aggressive` the `REQUEST_SYSTEM_REBOOT` rung needs a saturated model (99 / 98).
+- `TrendAnalyzer` fits raw points only, so a trend horizon longer than `windows.rawMs` returns
+  no samples even though 24 hours of aggregates and 14 days of daily summaries are available.

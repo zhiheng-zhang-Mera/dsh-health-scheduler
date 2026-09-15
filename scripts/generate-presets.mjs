@@ -385,10 +385,6 @@ const DEFS = {
         type: 'boolean',
         description: 'Whether a failing provider is retried after a backoff.',
       },
-      reportDegradedCapability: {
-        type: 'boolean',
-        description: 'Whether an unavailable action adapter marks its capability degraded.',
-      },
     },
   },
 
@@ -475,21 +471,6 @@ const DEFS = {
             type: 'number',
             exclusiveMinimum: 0,
             description: 'Expected heartbeat cadence, in milliseconds. Must be > 0.',
-          },
-        },
-      },
-      computerUse: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          probeOnTick: {
-            type: 'boolean',
-            description: "Whether the probe runs on the plugin's own tick.",
-          },
-          probeTimeoutMs: {
-            type: 'number',
-            exclusiveMinimum: 0,
-            description: 'Milliseconds a probe may take before it counts as a stall. Must be > 0.',
           },
         },
       },

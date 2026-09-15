@@ -459,14 +459,14 @@ these prefixes:
 | `restart_capability_unavailable` | — |
 | `system_reboot_requires_restart_adapter` | — |
 | `escalation_overrides_safe_point` | — |
-| `escalation_from_repeated_app_restart_failure` | attached to every level-4 candidate |
+| `escalation_requested_at_maximum_pressure` | attached to every level-4 candidate |
 | `uptime_pressure` | a driver code, not a reason prefix, but listed in the test vocabulary |
 | driver codes | the top three driver codes are appended to every `pressure_*` candidate |
 
 `coverage_NNpct` is appended to **every** decision, which means a consumer can always tell how
 much of the model was actually measured at the moment of the decision.
 
-`escalation_from_repeated_app_restart_failure` is worth calling out: it is attached to every
+`escalation_requested_at_maximum_pressure` is worth calling out: it is attached to every
 level-4 candidate unconditionally, but nothing in the engine actually verifies that an app
 restart previously failed. There is no escalation counter and no restart-outcome feedback loop
 in `0.1.0` — the escalation happens purely because pressure crossed the level-4 enter

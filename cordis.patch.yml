@@ -32,7 +32,7 @@
           # cost, and it is deliberately coarse: health is a trend, not a signal.
           intervalMs: 15000
           trendIntervalMs: 60000
-          persistIntervalMs: 300000
+          summaryIntervalMs: 300000
           providerBackoffMs: 30000
           providerBackoffMaxMs: 600000
 
@@ -49,7 +49,7 @@
         trend:
           minSamples: 3
           minSpanMs: 300000
-          minRsquared: 0.5
+          minRSquared: 0.5
 
         # Restart-pressure weights. They are renormalized over whichever
         # dimensions actually produced telemetry, and the renormalized share is
@@ -145,10 +145,6 @@
             # `heartbeat_delay_ms`.
             heartbeatFile: null
             heartbeatExpectedMs: 15000
-          computerUse:
-            probeOnTick: false
-            probeTimeoutMs: 2000
-
           # Files or commands that carry worker, Computer Use and UI telemetry.
           # Format: a JSON object whose `metrics` keys are canonical metric names,
           # or `name=value` lines on a command's stdout.

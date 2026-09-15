@@ -70,6 +70,21 @@ dsh plugin --profile web add dsh-health-scheduler
 dsh plugin --profile web add ./dsh-health-scheduler-0.1.0.tgz
 ```
 
+### bundle 贡献了什么
+
+`cordis.patch.yml` 插入一行 `id: health-scheduler`，它的 `config` 块以带注释的形式重述了整份
+`balanced` 预设。该层在每个更早的 bundle 之后、你自己的 profile `cordis.patch.yml` 之前应用，
+因此你的覆盖会生效。
+
+**patch 会替换目标行的整个 `config`，它不是深合并。** 如果你在 profile patch 里覆盖
+`providerOptions`，请复制你想改的整个嵌套对象，而不是只写那一个叶子。插件自己的配置解析**是**
+在所选预设之上的深合并，所以你直接传给插件的文档行为符合直觉 —— 是 profile patch 这一层在做
+替换。
+
+`plugin/manifest.json` 以机器可读的形式描述同一份契约：id、kind、入口模块、安装命令与 patch
+路径、必需与可选服务、设置命名空间、三个工具名、六种事件名、本插件亲自应用的动作与仅作为请求发出
+的动作，以及在 `dsh-restart` 或 worker control 缺席时哪些能力会降级。
+
 ### 启动前先验证
 
 `--dump-config` 会在不启动的情况下打印组合后的 profile 树。用它确认插件行存在、且配置就是你写的
@@ -96,12 +111,13 @@ dsh --profile web
 `dsh plugin ... add git+https://…` 失败时，CLI 会打印 pnpm 要求的确切键名；把它加到
 `<profile 目录>/pnpm-workspace.yaml` 的 `allowBuilds` 下，然后重跑同一条命令。
 
-本插件带有 `"prepack": "npm run build"`，因此：
+本插件带有 `"prepack": "npm run build"`，且 **`lib/` 被 gitignore**，因此：
 
-- **从 npm 或 tarball 安装不需要构建许可。** 发布的 tarball 里已经包含 `lib/`。
-- **从 git URL 安装需要那条 `allowBuilds` 记录**，因为必须先由 `prepare`/`prepack` 跑 `tsc`
-  才能有 `lib/`。
-- **从本地路径安装**在 `lib/` 已构建时等同于 tarball，否则需要先构建一次。
+- **从 npm 或 tarball 安装不需要构建许可。** 发布的 tarball 里包含由 `prepack` 钩子构建出的
+  `lib/`。
+- **从 git URL 安装总是需要那条 `allowBuilds` 记录**，因为检出里没有 `lib/`，必须先由
+  `prepack` 跑 `tsc` 才能生成它。
+- **从本地路径安装**在你已经跑过 `npm run build` 时等同于 tarball，否则需要先构建一次。
 
 ## 快速开始
 
@@ -309,13 +325,17 @@ Weights are renormalized over the dimensions that actually have telemetry; the f
 合并。当 profile 提供设置服务时，插件会注册设置命名空间 **`health-scheduler`**；没有设置服务时
 它仅靠 bundle patch 运行。
 
+有一点注意事项属于这里而不是配置参考：**profile patch 层不是深合并**。`cordis.patch.yml` 的一行
+会替换目标行的整个 `config`，因此只重述某个嵌套对象一部分的覆盖会丢掉其余部分。本节描述的深合并
+适用于插件实际收到的那份文档，见上文「bundle 贡献了什么」一节。
+
 逐键完整参考（含 stats 文件格式与命令探测格式）在
 **[docs/configuration.zh.md](docs/configuration.zh.md)**。
 
 | 分组 | 键 | 默认值 |
 | --- | --- | --- |
 | 总开关 | `enabled`、`preset` | `true`、`balanced` |
-| `sampling` | `intervalMs`、`trendIntervalMs`、`persistIntervalMs`、`providerBackoffMs`、`providerBackoffMaxMs` | 15 秒、60 秒、300 秒、30 秒、600 秒 |
+| `sampling` | `intervalMs`、`trendIntervalMs`、`summaryIntervalMs`、`providerBackoffMs`、`providerBackoffMaxMs` | 15 秒、60 秒、300 秒、30 秒、600 秒 |
 | `windows` | `rawMs`、`windowsMs`、`aggregateBucketMs`、`aggregateRetentionMs`、`dailyRetentionMs` | 30 分、`[5m,30m,2h,6h]`、5 分、24 小时、14 天 |
 | `trend` | `minSamples`、`minSpanMs`、`minRSquared` | 3、5 分、0.5 |
 | `weights` | `time`、`thermal`、`memory`、`runtime`、`worker`、`computer_use_ui` | 0.15 / 0.20 / 0.25 / 0.15 / 0.15 / 0.10 |
@@ -332,21 +352,35 @@ Weights are renormalized over the dimensions that actually have telemetry; the f
 无法被执行的配置会被大声拒绝。`resolveConfig` 抛出带点号路径的 `ConfigError`；插件的 `apply`
 捕获它、记录日志，并继续使用 `balanced` 预设，而不是让启动失败。
 
+### 你能拿到多少历史
+
+三个跨度，都有界，都可配置：
+
+| 跨度 | 位置 | 默认 | 回答什么 |
+| --- | --- | --- | --- |
+| 原始样本 | `windows.rawMs` | 30 分，若最长的 `windowsMs` 更长则抬高到该值 | 分位数、斜率、连续处于某个 band 的时长。 |
+| 聚合桶 | `windows.aggregateRetentionMs`、`aggregateBucketMs` | 24 小时、5 分钟桶 | 不保留原始点也能看到长跨度变化。 |
+| 每日汇总 | `windows.dailyRetentionMs` | 14 天 | “上周二比今天更糟吗？”—— 每个指标每天一个 `{count, mean, max, min}`。 |
+
+每日汇总是按需从聚合桶上卷得到，因此它的成本与桶的数量成正比，而不是与 uptime 成正比。它们会
+出现在每一份 `HealthSnapshot` 的 `dailySummaries` 上，以及 JSON 载荷的 `daily_summaries` 里，
+并且以本地午夜为界冻结，因此跨夏令时的一天仍然可比。
+
 ## 预设
 
 三个预设都从中性的 `balanced` 文档出发，且只在四处不同。`src/core/presets.ts` 里的
 `PRESET_SCALES` 就是全部内容：
 
 ```ts
-conservative: { enter: 0.85, exit: 0.75, cooldown: 1.5, maintenance: 0.85 }
-balanced:     { enter: 1,    exit: 1,    cooldown: 1,   maintenance: 1 }
-aggressive:   { enter: 1.15, exit: 1.05, cooldown: 0.7, maintenance: 1.3 }
+conservative: { bands: 0.85, cooldown: 1.5, maintenance: 0.85 }
+balanced:     { bands: 1,    cooldown: 1,   maintenance: 1 }
+aggressive:   { bands: 1.15, cooldown: 0.7, maintenance: 1.3 }
 ```
 
-`scalePreset` 把阶梯的每个 `enter` **和** `exit` 都乘以 `enter`（scale 对象里的 `exit` 字段被
-声明了，但代码对两个端点用同一个因子缩放，因此滞回宽度保持成比例），把三个冷却乘以
-`cooldown`，把 `maxDeferMs` / `minStateDwellMs` / `minRepeatActionMs` 乘以 `maintenance`。
-`urgentOverridePressure` 被**除以**带宽因子，因此更低压力的机器会更早视压力为紧急。
+`scalePreset` 把阶梯的每个 `enter` **和** `exit` 都乘以 `bands`，因此滞回宽度保持成比例而不是
+被压平；把三个冷却乘以 `cooldown`；把 `maxDeferMs`、`minStateDwellMs` 与 `minRepeatActionMs`
+乘以 `maintenance`。`urgentOverridePressure` 被**除以** `bands`，因此更低压力的机器会更早视压力
+为紧急。缩放后的阈值被钳制进 `1 … 99`。
 
 | 字段 | conservative | balanced | aggressive |
 | --- | --- | --- | --- |
@@ -413,30 +447,24 @@ RAM 比率和 `uptime_seconds` 有值，而报告会说明 coverage 很低。以
 
 以下内容在 `0.1.0` 中是如实缺席的，而不是半成品。
 
-- **仓库里缺少 `cordis.patch.yml`。** `package.json` 声明了
-  `dsh.bundle.patch: ./cordis.patch.yml` 并把该文件列进 `files`，但文件本身没有入库。在它存在
-  之前，`dsh plugin add` 会把本包当作普通依赖安装，并警告它没有可用的 bundle，因此插件永远不会
-  加入 profile 层栈。可注册的行本身（`name`、`inject`、`apply`、`health-scheduler` 设置命名
-  空间、三个工具）都已实现。
-- **`scripts/verify-artifacts.mjs` 不存在**，因此 `npm run verify:artifacts` 会失败。
-- **`npm run presets` 不存在。** `scripts/generate-presets.mjs` 本身可用
-  （`node scripts/generate-presets.mjs` 或 `--check`），四个生成文件目前也是最新的，但
-  `presets/README.md` 里写的 npm 别名从未加进 `package.json`。
 - **`./startup` 子路径导出指向未构建的文件。** `package.json` 把 `./startup` 导出为
-  `./lib/startup.js`；但不存在 `src/startup.ts`，因此该子路径无法解析。包内没有任何东西导入它。
-- **没有 UI 页面。** 设计稿里的 Health 页面没有实现。它的全部数据都在 `metricsSnapshot()` /
-  `HealthSnapshot` 中，但没有任何 client 插件渲染它。
-- **没有每日汇总，也没有长跨度趋势读取。** `windows.dailyRetentionMs` 被校验但从未被读取；
-  `TrendAnalyzer` 只对原始点做拟合，因此超过 `windows.rawMs` 的跨度取不到样本。24 小时的聚合桶
-  被保留但没有被使用。
-- **四个配置键被接受但被忽略**：`sampling.persistIntervalMs`、
-  `resilience.reportDegradedCapability`、`providerOptions.computerUse.probeOnTick`、
-  `providerOptions.computerUse.probeTimeoutMs`。它们能通过校验，会出现在解析后的配置与
-  `health_policy config` 里，但不改变任何行为。
-- **`providerOptions.memory.extraPids` 只是一条 note，不是实现。** 它被计入样本 note，但不会把
-  任何进程加进 RSS 求和中。
-- **长跑测试层没有实现。** 设计稿要求 6 小时 / 12 小时合成与 24 小时真机 soak；仓库里只有单元
-  测试与合成场景测试。
+  `./lib/startup.js` 与 `./lib/types/startup.d.ts`；但不存在 `src/startup.ts`，因此该子路径
+  无法解析。包内没有任何东西导入它，bundle patch 也不使用它，所以实际影响是一个死导出，而不是
+  安装失败。
+- **没有 UI 页面。** 设计稿里的 Health 页面没有实现。它需要的每个字段 —— 压力、逐维度表、逐指标
+  数值、维护、就绪度、能力、provider 状态、趋势、最近决策与每日汇总 —— 都在 `HealthSnapshot`
+  与 `metricsSnapshot()` 的 JSON 里，但没有任何 client 插件渲染它。
+- **`providerOptions.memory.extraPids` 覆盖的是整个 launcher 进程树，而不只是本进程。**
+  求和在后台从平台进程列表刷新，因此单独启动的 worker 里的泄漏也会出现在 `process_rss_bytes` 中。
+- **长跨度趋势改由聚合桶拟合。** 当请求的跨度比 `windows.rawMs` 更久远时，`TrendAnalyzer` 改为
+  拟合保留的桶均值而不是原始样本，并在趋势摘要里写明所用序列（`aggregate buckets`）。因此原始
+  跨度只有 6 小时的机器也能看见 24 小时的泄漏。
+- **长跑测试层没有实现。** 设计稿要求 6 小时 / 12 小时合成与 24 小时真机 soak；仓库里只有单元、
+  插件、调度器与合成场景测试。最接近的是那个 30 分钟、120 次评估的决策风暴上界。
+- **`git_operations_per_minute` 没有消费者。** 它被采集、被放在 `time` 维度、权重为 `0.5`，但
+  既无 band 又无趋势项，因此不贡献任何分数，也还没有任何东西把它当作安全点的忙碌信号。
+- **`escalation_requested_at_maximum_pressure` 陈述的是条件而非历史。** 引擎没有能让上一次应用
+  重启回传结果的通道，因此这个理由描述的是压力当前的形态，而不是宣称之前有重启失败过。的 patch。
 
 ## 文档索引
 
@@ -455,12 +483,13 @@ RAM 比率和 `uptime_seconds` 有值，而报告会说明 coverage 很低。以
 ## 开发
 
 ```sh
-npm install            # 只装开发依赖；插件没有运行时依赖
-npm run build          # tsc -p tsconfig.json -> lib/
-npm test               # npm run build && node --test tests/*.test.js
-npm run test:only      # node --test tests/*.test.js，使用现有 lib/
-npm run typecheck      # tsc -p tsconfig.json --noEmit
-npm run verify:artifacts   # 已损坏：脚本尚未编写（见路线图）
+npm install                # 只装开发依赖；插件没有运行时依赖
+npm run build              # tsc -p tsconfig.json -> lib/
+npm test                   # npm run build && node --test tests/*.test.js
+npm run test:only          # node --test tests/*.test.js，使用现有 lib/
+npm run typecheck          # tsc -p tsconfig.json --noEmit
+npm run presets            # 从 lib/ 重新生成 presets/*.json
+npm run verify:artifacts   # 校验构建产物与预设彼此一致
 ```
 
 值得了解的 TypeScript 设置：`strict`、`noUncheckedIndexedAccess`、`noUnusedLocals`、
@@ -469,11 +498,20 @@ npm run verify:artifacts   # 已损坏：脚本尚未编写（见路线图）
 只有 `src/dsh/` 知道 Cordis，而且是通过 `src/dsh/context.ts` 里那些窄结构接口知道的。这正是整个
 引擎无需运行时即可测试的原因。
 
-测试套件共 87 个测试、分布在 6 个文件中，按提交状态全部通过：
+测试套件共 148 个测试、分布在 8 个文件中，按提交状态全部通过：
 
 ```sh
 node --test tests/*.test.js
-# tests 87 / suites 16 / pass 87 / fail 0
+# tests 148 / suites 27 / pass 148 / fail 0
+```
+
+```sh
+node scripts/generate-presets.mjs --check
+# ok   presets/balanced.json matches PRESETS.balanced
+# ok   presets/conservative.json matches PRESETS.conservative
+# ok   presets/aggressive.json matches PRESETS.aggressive
+# ok   presets/schema.json matches the configuration schema
+# ok   4 generated files are up to date
 ```
 
 ## 常见问题

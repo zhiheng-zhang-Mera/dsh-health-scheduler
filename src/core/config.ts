@@ -261,7 +261,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): HealthSchedulerC
     sampling: {
       intervalMs: requirePositive('sampling.intervalMs', merged.sampling.intervalMs),
       trendIntervalMs: requirePositive('sampling.trendIntervalMs', merged.sampling.trendIntervalMs),
-      persistIntervalMs: requirePositive('sampling.persistIntervalMs', merged.sampling.persistIntervalMs),
+      summaryIntervalMs: requirePositive('sampling.summaryIntervalMs', merged.sampling.summaryIntervalMs),
       providerBackoffMs: requireNonNegative('sampling.providerBackoffMs', merged.sampling.providerBackoffMs),
       providerBackoffMaxMs: requirePositive(
         'sampling.providerBackoffMaxMs',
@@ -354,13 +354,6 @@ export function resolveConfig(overrides: ConfigOverrides = {}): HealthSchedulerC
         heartbeatExpectedMs: requirePositive(
           'providerOptions.runtime.heartbeatExpectedMs',
           merged.providerOptions.runtime.heartbeatExpectedMs,
-        ),
-      },
-      computerUse: {
-        probeOnTick: merged.providerOptions.computerUse.probeOnTick === true,
-        probeTimeoutMs: requirePositive(
-          'providerOptions.computerUse.probeTimeoutMs',
-          merged.providerOptions.computerUse.probeTimeoutMs,
         ),
       },
       statsFile: {

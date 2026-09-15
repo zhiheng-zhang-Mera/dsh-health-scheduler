@@ -100,8 +100,14 @@ export interface SamplingConfig {
   readonly intervalMs: number
   /** Milliseconds between trend evaluations; the cheap path in between. */
   readonly trendIntervalMs: number
-  /** Milliseconds between persistence flushes. */
-  readonly persistIntervalMs: number
+  /**
+   * Milliseconds between daily-summary rollups.
+   *
+   * The summary itself is cheap (it folds a few hundred buckets), but publishing it
+   * on every snapshot would put a per-tick allocation into a UI payload that only
+   * changes once a day, so the rollup is memoised for this long.
+   */
+  readonly summaryIntervalMs: number
   /** Backoff applied after the first provider failure, in milliseconds. */
   readonly providerBackoffMs: number
   /** Upper bound of the exponential provider backoff, in milliseconds. */
@@ -252,13 +258,6 @@ export interface ProviderOptions {
     readonly heartbeatFile: string | null
     /** Expected heartbeat cadence, in milliseconds. */
     readonly heartbeatExpectedMs: number
-  }
-  /** Computer-use provider options. */
-  readonly computerUse: {
-    /** Whether the probe runs on the plugin's own tick. */
-    readonly probeOnTick: boolean
-    /** Milliseconds a probe may take before it is counted as a stall. */
-    readonly probeTimeoutMs: number
   }
   /** Options for the three stats-file-backed providers. */
   readonly statsFile: {

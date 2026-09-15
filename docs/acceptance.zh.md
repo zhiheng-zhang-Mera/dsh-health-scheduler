@@ -7,7 +7,7 @@
 
 ```sh
 node --test tests/*.test.js
-# tests 87 / suites 16 / pass 87 / fail 0
+# tests 148 / suites 27 / pass 148 / fail 0
 ```
 
 测试文件：
@@ -15,13 +15,16 @@ node --test tests/*.test.js
 | 文件 | 套件 | 覆盖内容 |
 | --- | --- | --- |
 | `tests/normalization.test.js` | `canonical metric registry`、`normalizeSample`、`band scoring`、`sustain gate` | 词表、物理边界、爬升、持续时间门。 |
-| `tests/rolling.test.js` | `RollingStore`、`TrendAnalyzer` | 窗口统计、保留下限、band 计时、斜率与 R² 门槛、投影、格式化。 |
+| `tests/rolling.test.js` | `RollingStore`、`daily summaries`、`TrendAnalyzer` | 窗口统计、保留下限、band 计时、每日汇总、斜率与 R² 门槛、投影、格式化。 |
 | `tests/policy.test.js` | `action ladder`、`anti-flapping`、`restart gate`、`machine states` | 阈值、滞回、防抖、驻留、冷却、重启门禁、状态机。 |
 | `tests/maintenance.test.js` | `wall-clock parsing`、`maintenance picture`、`safe points` | 窗口算术、全部六个阶段、推迟账本输入、安全点折叠。 |
 | `tests/scenarios.test.js` | `synthetic scenarios`、`synthetic scenario invariants`、`scenario rig self-checks` | 六个设计场景端到端跑真实的调度器，外加不变式与 rig 自检。 |
+| `tests/plugin.test.js` | `plugin exports`、`applyHealthScheduler`、`model-facing tools`、`presentation helpers`、`external telemetry seams` | Cordis 契约、那条「不导出任何可以重启或杀进程的东西」的检查、设置注册、三个工具、报告渲染器，以及 stats 文件 / 命令探测接缝。 |
+| `tests/scheduler.test.js` | `ProviderRegistry`、`unavailable adapters`、`HealthScheduler`、`DecisionLog`、`scheduler clock discipline` | 熔断与指数退避、不可用适配器、tick 流水线与冷却对尝试次数的约束、日志轮转与回读、tick 节奏。 |
 
 测试夹具：`tests/helpers/rig.js`（带可注入时钟、脚本化 provider、记录型适配器与脚本化安全点的
 `ScenarioRig`）以及 `tests/helpers/drive.js`（共享的动作、状态与理由词表，以及 `drive()` 循环）。
+`tests/plugin.test.js` 与 `tests/scheduler.test.js` 直接构造假的 harness context，而不经过 rig。
 
 ## 验收标准
 
@@ -43,7 +46,7 @@ node --test tests/*.test.js
 | 11 | 定时维护使用 window，而非硬时间点。 | `is outside the window before it opens`；`is before_target inside the window but ahead of the target`；`is at_target exactly on the target instant`；`is deferred while the deferral budget lasts, then overdue`；`never allows a request when the configuration forbids one` | 是 |
 | 12 | throttle 优先于 restart。 | `a sustained heat soak raises thermal pressure and throttles`；`holds a restart request until the maintenance window opens` | 是 |
 | 13 | restart 优先 app 而不是 system。 | `escalates to a system reboot only above the top threshold`；`maps actions onto cooldown buckets and durations`。阶梯本身在 `action ladder` 中逐级断言。 | 是 |
-| 14 | system reboot 只用于升级路径。 | 部分：第 4 级要求压力 ≥ 它自己的 `enter`，而该值严格高于第 3 级的，且 `gateRestart` 会追加 `system_reboot_requires_restart_adapter`。但理由字符串 `escalation_from_repeated_app_restart_failure` 是无条件附加的 —— **没有**升级计数器，也没有重启结果的反馈回路，因此引擎并没有真的验证此前有一次应用重启失败过。 | **部分** |
+| 14 | system reboot 只用于升级路径。 | 部分：第 4 级要求压力 ≥ 它自己的 `enter`，而该值严格高于第 3 级的，且 `gateRestart` 会追加 `system_reboot_requires_restart_adapter`。但理由字符串 `escalation_requested_at_maximum_pressure` 是无条件附加的 —— **没有**升级计数器，也没有重启结果的反馈回路，因此引擎并没有真的验证此前有一次应用重启失败过。 | **部分** |
 | 15 | 有 hysteresis，避免状态抖动。 | `holds the active action while pressure sits inside the hysteresis band`；`does not oscillate around a threshold` | 是 |
 | 16 | 每次决策可解释。 | `produces one explainable reason per applied action`；`never emits an action above the pressure that justifies it` | 是 |
 | 17 | 长时间运行无 decision storm。 | `keeps ticking through a restart adapter that throws, without a request storm`（30 分钟、120 次评估，适配器调用被限制在 ≤ 3 次）。没有 6 小时 / 12 小时 / 24 小时的长跑测试。 | **部分** |
@@ -230,6 +233,70 @@ providers → normalization → rolling windows → trend → pressure → polic
 | `lets an urgent override escalate past the window` | 在 `urgent_override` + 不安全安全点下：第 4 级通过，同时带 `urgent_override_active` 与 `escalation_overrides_safe_point`。 |
 | `does not delay a critical escalation behind a debounce by accident` | 两次危重评估中的第一次被保持；第二次升级。 |
 
+### 插件表面（`tests/plugin.test.js`）
+
+| 测试 | 钉住了什么 |
+| --- | --- |
+| `exposes the Cordis plugin contract` | `name`、`inject` 与 `apply` 齐备且形状符合加载器预期。 |
+| `exposes the documented public API surface` | README 与本文档承诺的导出就是实际存在的导出。 |
+| `never exports anything that could restart or kill a process` | 标准 1 的自动化一半：包没有任何导出成员是子进程、kill、reboot 或 shutdown 原语。 |
+| `registers the three tools and starts monitoring` | `applyHealthScheduler` 返回三个工具名与一个运行中的调度器。 |
+| `registers its settings namespace with the resolved config as the base layer` | `health-scheduler` 命名空间以 `base: config` 与 `applies: 'live'` 注册。 |
+| `runs without a tools service and says so` | 缺少 `tools` 服务只降级为一条警告，而不是失败。 |
+| `runs without a settings service and says so` | `settings` 同理。 |
+| `rejects a bad configuration loudly but keeps running on the default preset` | 标准 18 的容纳能力：`ConfigError` 被记录，并改用 `balanced`。 |
+| `starts and stops the loop through apply and dispose` | dispose 时定时器被释放。 |
+| `does not start when the configuration disables it` | `enabled: false` 会加载插件，但既不采样也不启动循环。 |
+| `uses an unavailable restart adapter when dsh-restart is not installed` | 标准 2 的回退路径与场景 6。 |
+| `writes the decision log when a state directory is provided` | 有可写目录时审计轨迹会落盘。 |
+| `health_status returns a readable report and never claims unknown is healthy` | 标准 5 在模型视角下的表现。 |
+| `health_status supports its sections` | `full` / `pressure` / `maintenance` / `providers`。 |
+| `health_history returns window statistics as JSON` | `health_history` 的载荷形状。 |
+| `health_history rejects a non-canonical metric with a helpful error` | 错误会指出未知指标并列出合法名称。 |
+| `health_policy explains the ladder, the config and the audit trail` | 三种 `action` 模式。 |
+| `tool definitions advertise a bounded timeout and a string schema` | 每个工具都声明超时，而不会把一轮对话挂死。 |
+| `takes a first tick on demand when no snapshot exists yet` | 第一次计划 tick 之前的工具调用仍然有答案。 |
+| `renders a compact JSON payload with snake_case keys` | `metricsSnapshot()` 的键契约。 |
+| `formats a metric row for a table` | `renderMetricRow` 渲染 `unknown`，而不是占位数字。 |
+| `renders a report that mentions every section` | 人类可读报告不会静默丢掉任何一节。 |
+| `parses name=value and name,value command output and ignores unknown names` | 命令探测格式，包括非规范名会被丢弃。 |
+| `accepts both a wrapped stats document and a bare metric object` | 两种 stats 文件形状。 |
+| `reports an unconfigured stats source as unknown, never as zero` | 标准 5 在外部接缝上的表现。 |
+| `reports a missing stats file with a reason` | detail 会列出查找过的路径。 |
+| `treats a stale stats file as degraded` | `staleAfterMs` 会拒绝过期内容，而不是给它打分。 |
+| `reads a stats file into the stats-backed providers` | 四个 stats 支撑的 provider 按各自的 `provides` 列表拆分同一个文件。 |
+| `reports a failing helper command as a degraded sample rather than an error` | 以非零状态退出的辅助程序只会让样本降级，不会抛异常。 |
+
+### 调度器与注册表（`tests/scheduler.test.js`）
+
+| 测试 | 钉住了什么 |
+| --- | --- |
+| `rejects a duplicate provider id` | 注册有幂等守卫，两个 provider 不能争抢同一个 id。 |
+| `contains a throwing provider and keeps the others` | 标准 3 与标准 4。 |
+| `applies an exponential backoff after the failure limit and retries later` | 熔断器：先容忍失败，然后进入跳过窗口，随后恢复。 |
+| `honours the disabled list and per-provider enable flag without failing` | `disabledProviders` 与 `enabled: false`。 |
+| `notifies failure listeners without letting one break sampling` | 抛异常的观察者不能中断采样轮。 |
+| `report unavailable and refuse without throwing` | `UnavailableRestartAdapter` 与 `UnavailableWorkerControlAdapter`。 |
+| `builds audit outcomes from adapter results` | `outcomeForAction`。 |
+| `produces a snapshot with unknown dimensions when nothing is registered` | 零 provider 时的标准 5：每个维度都是 unknown，压力是 `null` 而不是 `0`。 |
+| `records metrics, computes pressure and keeps coverage honest` | coverage 数值与实际存在的遥测相符。 |
+| `applies a throttle through the worker-control adapter and releases it on recovery` | 标准 12 的机制，包括释放。 |
+| `refuses to guess a concurrency target when none is configured or derivable` | `throttleLimit` 返回 `null`，而不是编造一个上限。 |
+| `survives an unavailable worker-control adapter` | 缓解手段降级；监控继续。 |
+| `records a decision for every applied action and explains it` | 标准 16 在调度器层面的表现。 |
+| `does not emit a decision storm over a long run` | 标准 17 在调度器层面的表现。 |
+| `starts and stops the periodic loop idempotently` | 两次 `start()` 仍是一个循环；`stop()` 安全。 |
+| `does not sample at all when disabled` | `enabled: false` 会让 tick 短路。 |
+| `reconfigures live without losing history` | `reconfigure` 保留存储与策略状态。 |
+| `exposes per-window history for a metric` | `windowsFor()` 为每个已配置窗口返回一项。 |
+| `ingests a sample directly and reports normalization violations` | `ingest()` 接缝及其 violation 上报。 |
+| `contains a throwing event listener` | 坏的订阅者不能中断循环。 |
+| `uses a registered safe point to gate the maintenance request` | 安全点经由真实调度器抵达策略层，而不只是手工构造的输入。 |
+| `keeps a bounded in-memory ring`、`writes and reads back a JSONL log with a schema version`、`tolerates a truncated trailing line`、`never throws when the log directory cannot be written`、`rotates the file once it exceeds the size budget` | `DecisionLog` 的完整契约，包括失败路径。 |
+| `never samples faster than the configured interval when running` | 循环遵守 `sampling.intervalMs`。 |
+| `keeps the last tick instant` | `lastTickMs` 跟随注入的时钟。 |
+| `reports uptime-derived time pressure through the runtime provider` | uptime 爬升在真实流水线中由 `uptime_seconds` 供数，而不只是在单元测试里。 |
+
 ### 状态机
 
 | 测试 | 钉住了什么 |
@@ -282,38 +349,56 @@ providers → normalization → rolling windows → trend → pressure → polic
 | 重启门禁与安全点折叠 | 是 | — |
 | 维护阶段与墙钟算术 | 是 | — |
 | 审计理由与结果 | 是 | — |
-| 从 `os.cpus()` 测量 `cpu_usage` | 否 —— rig 脚本化它 | 是。差分在某台机器上是否合理是真机问题。 |
+| 从 `os.cpus()` 测量 `cpu_usage` | 否 —— rig 与假环境会脚本化它 | 是。差分在某台机器上是否合理是真机问题。 |
 | 从 `process.getActiveResourcesInfo()` 取 `handle_count` | 否 | 是。该代理只在真实运行时上才有意义。 |
 | 从 `os` 取 `ram_*` 与 `process_rss_bytes` | 否 | 是。 |
-| 配置的辅助命令确实产出可解析的行 | 否 | 是。`runCommandProbe` 在测试中只通过环境接缝被触及。 |
-| 真实集成写入 stats 文件 | 否 | 是。 |
+| 配置的辅助命令产出可解析的行 | **是** —— `parses name=value and name,value command output and ignores unknown names` 与 `reports a failing helper command as a degraded sample rather than an error` | 是，对 `nvidia-smi` 这类真实厂商工具、在真实硬件上。 |
+| stats 文件格式 | **是** —— `accepts both a wrapped stats document and a bare metric object`、`reports a missing stats file with a reason`、`treats a stale stats file as degraded`、`reads a stats file into the stats-backed providers` | 是，对真实集成在真实时序下写出的文件。 |
 | 心跳文件 mtime 跟随活跃事件循环 | 否 | 是。 |
 | 任何真实重启请求抵达 `dsh-restart` | 否 | 是。仓库里没有 `dsh-restart` 适配器。 |
 | worker-control 真正改变并发 | 否 | 是。测试中没有绑定任何 harness worker-control 服务。 |
+| 真实 profile 启动并加载 bundle patch | 否 | 是。对真实 profile 跑 `dsh --profile web --dump-config` 就是这个检查。 |
 | 卸载后 DS-Hns 不受影响 | 否 | 是。 |
 | 6 小时 / 12 小时合成与 24 小时 soak | 否 —— 长跑测试层未实现 | 是，且合成层本可以自动化 |
 
 ## 已知覆盖缺口
 
-如实陈述，以便维护者决定先补哪个：
+如实陈述，以便维护者决定先补哪个。上一版本文档中的若干缺口已经补上，列在本节末尾。
 
 1. **没有长跑测试层。** 标准 17 只验证了 30 分钟的场景时间，而不是 6 或 12 小时。用现有 rig 跑
    6 小时合成很便宜（时钟是注入的，所以只是一次 tick 循环），并且会远更有说服力地支撑“无决策
    风暴”这一主张。
-2. **没有测试 provider 退避窗口被遵守。** 熔断器的 `disabledUntil`、`skipped` 列表与指数调度都
-   未被验证。rig 的 `failNext(n)` 加一次时钟跳变就能覆盖。
-3. **没有测试 `normalizeSample` 的硬边界对齐。** `1e-9` 相对容差路径（刚好在边界内的值被对齐而
+2. **没有测试 `normalizeSample` 的硬边界对齐。** `1e-9` 相对容差路径（刚好在边界内的值被对齐而
    不是被拒绝）没有被断言。
-4. **完全没有审计日志的测试。** `DecisionLog` 的轮转、`readPersisted`、写了一半的尾行以及写入
-   失败路径都没有覆盖。
-5. **没有 `registerTools`、`renderHealthReport` 或 `metricsSnapshot` 的测试。** 面向模型的表面
-   与报告渲染器未被测试；对一个固定快照做黄金输出测试成本很低。
-6. **没有 `resolveConfig` 的测试。** 校验规则被文档化并间接执行（每个测试都调用
-   `resolveConfig`），但拒绝消息本身没有被断言。
-7. **没有设置命名空间或 `reconfigure` 的测试。** 实时重载路径未被验证。
-8. **没有断言 `apply` 是防御性的。** 入口的容纳是结构性的（配置错误、provider 失败、适配器
-   失败、安全点失败与逐工具注册失败都被捕获），但没有被断言。用一个最小的假 `ctx` 和一份畸形
-   配置调用 `applyHealthScheduler` 就能确认。
-9. **标准 14 的升级理由没有升级计数器支撑。** 理由
-   `escalation_from_repeated_app_restart_failure` 被无条件附加到每个第 4 级候选。要么补上计数
+3. **没有测试 `resolveConfig` 的拒绝消息。** 校验规则被大量执行（每个测试都调用
+   `resolveConfig`，`verify:artifacts` 也断言了两处拒绝），但确切的 `ConfigError` 文本没有被
+   断言。configuration 文档里那张消息表目前是文档，还不是契约。
+4. **没有测试设置的 *watch* 路径。** 注册被断言（
+   `registers its settings namespace with the resolved config as the base layer`），调度器的实时
+   重配置也被断言（`reconfigures live without losing history`），但把两者连起来的
+   `scope.watch` 回调没有被端到端驱动。
+5. **标准 2 没有自动化。** 没有任何东西断言可以替换进任意 `RestartAdapter` 且决策路径行为一致。
+   rig 里已有的记录型适配器让这成为一个小测试。
+6. **没有针对 stats 文件读取器的对抗性测试。** 符号链接路径、在 `existsSync` 与 `readFileSync`
+   之间被替换的路径，以及超大文件在 [SECURITY.md](../SECURITY.md) 中有讨论但没有被实际演练。
+7. **标准 14 的升级理由没有升级计数器支撑。** 理由
+   `escalation_requested_at_maximum_pressure` 被无条件附加到每个第 4 级候选。要么补上计数
    器，要么改掉这个理由字符串；断言当前行为的测试只会把这个不一致固化下来。
+
+上一版本文档以来已补上的缺口：
+
+- **provider 退避已有覆盖**：`applies an exponential backoff after the failure limit and retries
+  later` 让某个 provider 越过 `providerFailureLimit`，并断言跳过与恢复。
+- **审计日志已有覆盖**：`writes and reads back a JSONL log with a schema version`、
+  `tolerates a truncated trailing line`、`never throws when the log directory cannot be written`、
+  `rotates the file once it exceeds the size budget`、`keeps a bounded in-memory ring` 以及
+  `writes the decision log when a state directory is provided`。
+- **工具表面与报告渲染器已有覆盖**：`tests/plugin.test.js` 的四个套件，其中包括
+  `never exports anything that could restart or kill a process` —— 标准 1 的自动化一半。
+- **插件入口的容纳能力已部分覆盖**：
+  `rejects a bad configuration loudly but keeps running on the default preset`、
+  `runs without a tools service and says so`、`runs without a settings service and says so`、
+  `contains a throwing event listener` 与 `does not sample at all when disabled`。
+- **每日汇总已有覆盖**：`tests/rolling.test.js` 的 `daily summaries` 套件。
+- **tick 节奏已有覆盖**：`scheduler clock discipline` 套件断言循环绝不会快于
+  `sampling.intervalMs` 采样。

@@ -19,6 +19,7 @@ import type { CommandProbeConfig, ProviderOptions } from '../types/config.js'
 import type { CanonicalMetric } from '../types/metrics.js'
 import type { HealthProvider, HealthSample } from '../types/provider.js'
 import type { ProviderEnvironment } from './environment.js'
+import type { ProcessTreeReader } from './process-tree.js'
 
 const PROVIDES: readonly CanonicalMetric[] = [
   'commit_used_ratio',
@@ -48,11 +49,18 @@ export class MemoryProvider implements HealthProvider {
   private readonly environment: ProviderEnvironment
   private readonly options: ProviderOptions['memory']
   private readonly helper: MemoryHelper
+  private readonly tree: ProcessTreeReader | null
 
-  constructor(environment: ProviderEnvironment, options: ProviderOptions['memory'], helper: MemoryHelper) {
+  constructor(
+    environment: ProviderEnvironment,
+    options: ProviderOptions['memory'],
+    helper: MemoryHelper,
+    tree: ProcessTreeReader | null = null,
+  ) {
     this.environment = environment
     this.options = options
     this.helper = helper
+    this.tree = tree
   }
 
   async sample(): Promise<HealthSample> {
@@ -71,7 +79,10 @@ export class MemoryProvider implements HealthProvider {
       notes.push('os.totalmem() reported 0, RAM metrics omitted')
     }
 
-    const rss = this.environment.process.treeRssBytes ?? this.environment.process.rssBytes
+    // The process-tree sum is what a leak looks like from outside: it covers the
+    // launcher and any worker the host runs separately, not just this process.
+    const selfRss = this.environment.process.rssBytes
+    const rss = this.tree === null ? (this.environment.process.treeRssBytes ?? selfRss) : this.tree.total(nowMs, selfRss)
     if (rss > 0) metrics.process_rss_bytes = rss
 
     let degraded = total <= 0
@@ -105,7 +116,10 @@ export class MemoryProvider implements HealthProvider {
     }
 
     if (this.options.extraPids.length > 0) {
-      notes.push(`process tree RSS includes ${this.options.extraPids.length} configured extra pid(s)`)
+      if (this.tree !== null && this.tree.error !== null) {
+        notes.push(`process tree query: ${this.tree.error}`)
+      }
+      notes.push(`process RSS includes ${this.options.extraPids.length} configured extra pid(s)`)
     }
 
     if (metrics.commit_used_ratio === undefined && metrics.vram_used_ratio === undefined) {

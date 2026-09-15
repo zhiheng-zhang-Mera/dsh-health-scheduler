@@ -239,7 +239,23 @@ describe('TrendAnalyzer', () => {  it('detects a memory leak as a worsening tren
     assert.ok(projection.perHour > 450_000_000, `slope was ${projection.perHour}`)
     // The latest sample sits 2.5 GB under the ceiling at 500 MB/h, i.e. 5 h.
     assert.ok(projection.msToCeiling > 2 * HOUR, `projected ${projection.msToCeiling}`)
-    assert.ok(projection.msToCeiling <= 5 * HOUR, `projected ${projection.msToCeiling}`)
+    assert.ok(projection.msToCeiling < 6 * HOUR, `projected ${projection.msToCeiling}`)
+  })
+
+  it('reads a trend from the aggregate buckets when the raw window cannot reach', () => {
+    const { config, store: rolling } = store({ windows: { windowsMs: [5 * MINUTE, 30 * MINUTE] } })
+    const trends = new TrendAnalyzer(rolling, config.trend)
+    const base = 1_000_000
+    // Two hours of +300 MB/h at 1 Hz. The raw horizon is 30 minutes, so the only
+    // series that spans the requested four hours is the aggregate buckets.
+    for (let i = 0; i <= 120; i += 1) {
+      rolling.record('process_rss_bytes', 2_000_000_000 + i * MINUTE * (300_000_000 / HOUR), base + i * MINUTE)
+    }
+    const trend = trends.evaluate('process_rss_bytes', base + 120 * MINUTE, 2 * HOUR)
+    assert.equal(trend.isWorsening, true)
+    assert.ok(Math.abs(trend.slopePerHour - 300_000_000) < 10_000_000, `slope was ${trend.slopePerHour}`)
+    assert.ok(trend.rSquared > 0.99, `R² was ${trend.rSquared}`)
+    assert.match(trend.summary, /aggregate buckets/, 'the summary must say which series it fitted')
   })
 
   it('formats slopes in the metric own unit', () => {

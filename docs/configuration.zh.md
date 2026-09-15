@@ -18,11 +18,20 @@
 
 三个位置，优先级递增：
 
-1. **bundle patch 行** —— `cordis.patch.yml` 中该插件行的 `config:` 块。
+1. **bundle patch 行** —— [`cordis.patch.yml`](../cordis.patch.yml) 中该插件行的 `config:` 块。
+   **patch 会替换目标行的整个 `config`，它不做深合并。** 只重述某个嵌套对象一部分的覆盖会丢掉
+   其余部分，所以请复制你想改的整个嵌套对象。
 2. **`health-scheduler` 设置命名空间** —— 当 profile 提供设置服务时注册。`scope.watch` 在每次
-   变更时调用 `resolveConfig` 并调用 `scheduler.reconfigure`，因此设置变更**实时**生效：历史与
-   策略状态被保留，provider 退避窗口被重置。
+   变更时调用 `resolveConfig` 并调用 `scheduler.reconfigure`，因此设置变更**实时**生效：历史、
+   策略状态与每日汇总被保留，provider 退避窗口被重置。
 3. **直接使用库** —— `resolveConfig(overrides)` / `createScheduler({ config, … })`。
+
+本文档其余部分描述的合并适用于插件收到的那份文档（第 2、3 步，以及该行 `config` 最终变成的
+东西）。`deepMerge` 深合并对象、替换数组，并把 `null` 当作值而不是删除。
+
+需要留意一个大小写陷阱：`resolveConfig` 读的是带大写 `S` 的 `trend.minRSquared`，而随包发布的
+`cordis.patch.yml` 把它拼成 `minRsquared`。无法识别的叶子会被直接忽略而不是被拒绝，因此该 patch
+行为正确（默认值 `0.5` 生效），但那一行什么也没做。请使用下面表格中的精确拼写。
 
 无法被执行的文档会被大声拒绝。`resolveConfig` 抛出 `ConfigError`，消息形如
 `health-scheduler config: <dotted.path> <explanation>`。插件的 `apply` 使用
@@ -44,8 +53,8 @@
 | 键 | 类型 | 默认 | 作用 |
 | --- | --- | --- | --- |
 | `intervalMs` | number > 0 | `15000`（15 秒） | 调度器两拍之间的毫秒数。定时器被 `unref()`，因此它自己永远不会让进程保持存活。 |
-| `trendIntervalMs` | number > 0 | `60000`（60 秒） | 与距上次趋势评估的时间比较，用于推进 `lastTrendAt`。**目前没有任何行为依赖它**：`tick()` 每拍都评估趋势，只是更新那个时间戳。 |
-| `persistIntervalMs` | number > 0 | `300000`（5 分） | **被接受但被忽略。** 没有任何东西读它；决策日志在每次动作被应用时同步追加。 |
+| `trendIntervalMs` | number > 0 | `60000`（60 秒） | 完整趋势扫描的间隔。两次扫描之间快照复用上一次的趋势列表，因此 15 秒的 tick 不会每分钟对每个指标重拟合 4 次。 |
+| `summaryIntervalMs` | number > 0 | `300000`（5 分） | 快照中的按天汇总重新折叠的间隔。折叠读的是聚合桶而不是原始样本，因此这是一个记忆化窗口，而非保留期设置。 |
 | `providerBackoffMs` | number ≥ 0 | `30000`（30 秒） | provider 熔断退避的基数。`0` 会取消延迟（失败计数仍然递增）。 |
 | `providerBackoffMaxMs` | number > 0 | `600000`（10 分） | 指数退避的上限。 |
 
@@ -61,10 +70,38 @@
 | `windowsMs` | 非空、严格递增的正数数组 | `[300000, 1800000, 7200000, 21600000]`（5 分、30 分、2 时、6 时） | 计算 `WindowStats` 并由 `health_history` 报告的窗口。 |
 | `aggregateBucketMs` | number > 0 | `300000`（5 分） | 长跨度 mean/max/min 序列的桶大小。 |
 | `aggregateRetentionMs` | number > 0 | `86400000`（24 时） | 桶保留时长。 |
-| `dailyRetentionMs` | number > 0 | `1209600000`（14 天） | **被接受但被忽略。** `0.1.0` 中没有每日汇总，因此没有东西消费这个值。 |
+| `dailyRetentionMs` | number > 0 | `1209600000`（14 天） | 每日上卷的跨度。超过该跨度的桶会被排除在 `dailySummaries()` 之外，因此该值界定了“上周二比今天更糟吗？”这个答案的范围。 |
 
 内存由构造方式保证有界：原始点在每次写入时被裁剪到 `rawMs`，桶被裁剪到
 `aggregateRetentionMs`，因此存储不随 uptime 增长。
+
+### 每日汇总
+
+`RollingStore.dailySummaries(nowMs)` 把保留的聚合桶折叠成**每个本地日历日**、每个指标一条汇总：
+
+```ts
+interface DailySummary {
+  dayStart: string                     // 本地午夜的 ISO-8601
+  metrics: readonly {
+    metric: CanonicalMetric
+    count: number                      // 一天背后的样本总数
+    mean: number                       // 按样本数加权，而不是均值的均值
+    max: number
+    min: number
+  }[]
+}
+```
+
+三个性质值得知道：
+
+- **均值按样本数合并**，因此安静的一小时无法压过忙碌的一小时。
+- **成本与桶数量成正比，而不是与 uptime 成正比。** 没有任何东西是从原始样本重算的；那么早的
+  原始样本本来就不存在。
+- **天是本地日历日**，因此跨夏令时的一天仍然可比；23 或 25 小时的一天仍然算一天。
+
+结果会出现在每一份 `HealthSnapshot` 的 `dailySummaries()` 上，以及 JSON 载荷的
+`daily_summaries` 里。它是插件目前唯一提供的长跨度答案：对聚合序列没有*趋势*拟合，因为
+`TrendAnalyzer` 只读原始点。
 
 > **趋势跨度是最长的 `windowsMs` 项。** `PressureEngine` 与调度器都把
 > `windowsMs[windowsMs.length - 1]` 作为趋势回看跨度传入，而 `TrendAnalyzer` 只对**原始**点
@@ -202,7 +239,6 @@ function throttleLimit(config, activeWorkers) {
 | --- | --- | --- | --- |
 | `providerFailureLimit` | number > 0 | `3` | 指数退避开始前的连续失败次数。被截断并抬高到至少 `1`。 |
 | `providerRetryAfterBackoff` | boolean | `true` | 为 `false` 时，provider 在第一次失败后永不被重试：只要 `consecutiveFailures > 0`，`isAvailable` 就返回 `false`。 |
-| `reportDegradedCapability` | boolean | `true` | **被接受但被忽略。** 能力状态始终来自适配器自身的 `capability` 字段。 |
 
 ## `storage`
 
@@ -245,7 +281,7 @@ function throttleLimit(config, activeWorkers) {
 
 | 键 | 类型 | 默认 | 作用 |
 | --- | --- | --- | --- |
-| `extraPids` | 非负整数数组 | `[]` | **只是一条 note，不是实现。** 非空时样本的 `note` 会写 `process tree RSS includes N configured extra pid(s)`；并不会真的把任何进程加进 RSS 求和。 |
+| `extraPids` | 非负整数数组 | `[]` | 额外计入 `process_rss_bytes` 的 pid，使泄漏信号覆盖整个 launcher 进程树而不只是本进程。求和在后台按 `2 × sampling.intervalMs` 的节奏从平台进程列表（Windows 用 `tasklist`，其他平台用 `ps`）刷新；查询失败时求和中只剩本进程，并在样本 note 里说明。 |
 
 内存 provider **没有自己的辅助选项**：`applyHealthScheduler` 把
 `config.providerOptions.hardware.helperCommand` 与 `helperTimeoutMs` 传进内存 provider，因此两个
@@ -264,7 +300,6 @@ provider 运行同一条命令，各自保留它能识别的指标。
 
 | 键 | 类型 | 默认 | 作用 |
 | --- | --- | --- | --- |
-| `probeOnTick` | boolean | `false` | **被接受但被忽略。** 不存在 computer-use 探测；该 provider 由 stats 文件驱动。 |
 | `probeTimeoutMs` | number > 0 | `2000` | **被接受但被忽略**，原因同上。 |
 
 ### `providerOptions.statsFile`

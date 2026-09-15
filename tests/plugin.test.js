@@ -486,6 +486,63 @@ describe('external telemetry seams', () => {
     }
   })
 
+  it('parses a tasklist line into resident bytes for the process tree', async () => {
+    const { parseTasklistMemoryLine, parsePsMemoryLine } = await import('../lib/providers/process-tree.js')
+    assert.deepEqual(parseTasklistMemoryLine('"node.exe","4242","Console","1","1,234,567 K"'), {
+      pid: 4242,
+      rssBytes: 1_234_567 * 1024,
+    })
+    assert.deepEqual(parseTasklistMemoryLine('"node.exe","7","Console","1","512,000 K"'), {
+      pid: 7,
+      rssBytes: 512_000 * 1024,
+    })
+    assert.deepEqual(parseTasklistMemoryLine('"x.exe","3","Console","1","1.5 G"'), {
+      pid: 3,
+      rssBytes: 1.5 * 1024 ** 3,
+    })
+    assert.equal(parseTasklistMemoryLine('INFO: No tasks are running which match the specified criteria.'), null)
+    assert.equal(parseTasklistMemoryLine(''), null)
+    assert.deepEqual(parsePsMemoryLine('  4242  102400'), { pid: 4242, rssBytes: 102400 * 1024 })
+    assert.equal(parsePsMemoryLine('nonsense'), null)
+  })
+
+  it('adds configured extra pids to the process RSS sum, and reports a failed query', async () => {
+    const { ProcessTreeReader } = await import('../lib/providers/process-tree.js')
+    const reader = new ProcessTreeReader({
+      extraPids: [111, 222],
+      refreshMs: 0,
+      selfPid: 1,
+      runner: async (file) => {
+        // The runner is asked once for the whole list, whichever platform.
+        if (file === 'tasklist.exe' || file === 'ps') {
+          return process.platform === 'win32'
+            ? { stdout: '"node.exe","111","Console","1","100,000 K"\r\n"node.exe","222","Console","1","50,000 K"', code: 0 }
+            : { stdout: '111 100000\n222 50000\n', code: 0 }
+        }
+        return { stdout: '', code: 1 }
+      },
+    })
+    const total = reader.total(1_000, 10_000)
+    // The background refresh has been kicked off but has not resolved yet, so the
+    // first reading is this process alone.
+    assert.equal(total, 10_000)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const withTree = reader.total(2_000, 10_000)
+    assert.equal(withTree, 10_000 + 150_000 * 1024)
+    assert.equal(reader.error, null)
+    assert.deepEqual(reader.pids, [1, 111, 222])
+
+    const failing = new ProcessTreeReader({
+      extraPids: [999],
+      refreshMs: 0,
+      runner: async () => ({ stdout: '', code: 1 }),
+    })
+    assert.equal(failing.total(1, 5_000), 5_000)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(failing.total(2, 5_000), 5_000, 'a failed query leaves only this process in the sum')
+    assert.match(failing.error, /exited with 1/)
+  })
+
   it('reads a stats file into the stats-backed providers', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'dsh-hs-stats-'))
     const path = join(directory, 'metrics.json')

@@ -33,6 +33,7 @@ import { HardwareProvider } from '../providers/hardware.js'
 import { MemoryProvider } from '../providers/memory.js'
 import { RuntimeProvider, EMPTY_RUNTIME_FEED, type RuntimeFeed } from '../providers/runtime.js'
 import { buildStatsBackedProviders } from '../providers/stats-driven.js'
+import { ProcessTreeReader } from '../providers/process-tree.js'
 import { StatsFileSource } from '../providers/sources.js'
 
 /** Collaborators injected by the package entry point, so this module stays testable. */
@@ -166,10 +167,20 @@ function registerBuiltInProviders(
   }
   if (!disabled.has('memory')) {
     scheduler.registerProvider(
-      new MemoryProvider(environment, config.providerOptions.memory, {
-        command: config.providerOptions.hardware.helperCommand,
-        timeoutMs: config.providerOptions.hardware.helperTimeoutMs,
-      }),
+      new MemoryProvider(
+        environment,
+        config.providerOptions.memory,
+        {
+          command: config.providerOptions.hardware.helperCommand,
+          timeoutMs: config.providerOptions.hardware.helperTimeoutMs,
+        },
+        config.providerOptions.memory.extraPids.length === 0
+          ? null
+          : new ProcessTreeReader({
+              extraPids: config.providerOptions.memory.extraPids,
+              refreshMs: config.sampling.intervalMs * 2,
+            }),
+      ),
     )
     ids.push('memory')
   }

@@ -320,7 +320,10 @@ export class PolicyEngine {
           reasons: [
             `pressure_${pressure}_gte_system_reboot_${threshold}`,
             ...topDriverCodes(input.pressure),
-            'escalation_from_repeated_app_restart_failure',
+            // Stated as a condition, not as a claim about history: this plugin sees
+            // a request to escalate and has no channel through which a previous
+            // application restart could have reported its outcome.
+            'escalation_requested_at_maximum_pressure',
           ],
         }
       default:
@@ -344,6 +347,16 @@ export class PolicyEngine {
     if (action === 'REQUEST_SYSTEM_REBOOT' && input.restartCapability !== 'available') {
       blocked = true
       reasons.push('system_reboot_requires_restart_adapter')
+    }
+
+    // Whether the *configuration* allows a scheduled restart at all. This module
+    // owns the maintenance decision, so it is the one that has to honour the switch;
+    // leaving it to the caller would mean `allowAppRestart: false` still produced
+    // requests, which is exactly the sort of half-applied setting that erodes trust
+    // in a safety knob.
+    if (!this.config.maintenance.allowAppRestart) {
+      blocked = true
+      reasons.push('maintenance_app_restart_disabled')
     }
 
     if (input.maintenance.urgentOverride) {

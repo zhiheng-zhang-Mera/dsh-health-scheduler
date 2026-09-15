@@ -79,12 +79,27 @@ export class TrendAnalyzer {
   /**
    * Evaluate one metric over a horizon.
    *
+   * Raw samples are preferred while they reach back far enough. Past that the
+   * aggregate buckets take over, because a horizon the raw window cannot cover is
+   * not "no trend" — it is a trend that has to be read from a coarser series.
+   *
    * @param metric - canonical metric name.
    * @param nowMs - evaluation instant.
    * @param horizonMs - look-back horizon in milliseconds.
    */
   evaluate(metric: CanonicalMetric, nowMs: number, horizonMs: number): MetricTrend {
     const points = this.store.rawPoints(metric, horizonMs, nowMs)
+    const rawSpan = points.length >= 2 ? (points[points.length - 1] as { t: number }).t - (points[0] as { t: number }).t : 0
+
+    // A raw series that only reaches halfway across the requested horizon is worse
+    // than the buckets, so the buckets win as soon as raw coverage falls short.
+    if (rawSpan < horizonMs * 0.9) {
+      const bucketFit = this.store.fitBuckets(metric, horizonMs, nowMs)
+      if (bucketFit !== null && bucketFit.spanMs >= this.config.minSpanMs) {
+        return this.verdict(metric, bucketFit, 'aggregate buckets')
+      }
+    }
+
     const count = points.length
     const first = points[0]
     const last = points[points.length - 1]
@@ -120,25 +135,34 @@ export class TrendAnalyzer {
       }
     }
 
+    return this.verdict(metric, { slopePerHour: fit.slope, rSquared: fit.rSquared, count, spanMs }, 'raw samples')
+  }
+
+  /** Turn a fit into a trend verdict, applying the trust gates. */
+  private verdict(
+    metric: CanonicalMetric,
+    fit: { readonly slopePerHour: number; readonly rSquared: number; readonly count: number; readonly spanMs: number },
+    source: string,
+  ): MetricTrend {
     const descriptor = metricDescriptor(metric)
-    const rising = fit.slope > 0
+    const rising = fit.slopePerHour > 0
     const direction: TrendDirection =
       fit.rSquared < this.config.minRSquared ? 'flat' : rising ? 'rising' : 'falling'
     const worsening = descriptor?.polarity === 'higher-is-worse' ? rising : !rising
     const trusted = fit.rSquared >= this.config.minRSquared
-    const isWorsening = trusted && worsening && Math.abs(fit.slope) > 0
+    const isWorsening = trusted && worsening && Math.abs(fit.slopePerHour) > 0
 
     const summary = trusted
-      ? `${formatSlopePerHour(metric, fit.slope)} (R²=${fit.rSquared.toFixed(2)}, ${Math.round(spanMs / 60_000)} min)`
+      ? `${formatSlopePerHour(metric, fit.slopePerHour)} (R²=${fit.rSquared.toFixed(2)}, ${Math.round(fit.spanMs / 60_000)} min, ${source})`
       : `movement within noise (R²=${fit.rSquared.toFixed(2)} < ${this.config.minRSquared})`
 
     return {
       metric,
       direction,
-      slopePerHour: fit.slope,
+      slopePerHour: fit.slopePerHour,
       rSquared: fit.rSquared,
-      spanMs,
-      count,
+      spanMs: fit.spanMs,
+      count: fit.count,
       isWorsening,
       summary,
     }

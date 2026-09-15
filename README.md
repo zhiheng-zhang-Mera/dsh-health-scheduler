@@ -54,7 +54,8 @@ Three promises follow from that table, and they are load-bearing:
 
 `dsh plugin --profile <name> <pnpm args>` forwards its remaining arguments to `pnpm`
 inside the profile directory and then reconciles the profile's bundle list, so an
-installed package that declares `dsh.bundle` joins the layer stack automatically.
+installed package that declares `dsh.bundle` joins the layer stack automatically. This
+package declares `dsh.bundle.patch: ./cordis.patch.yml`.
 
 From a local checkout of this repository:
 
@@ -76,6 +77,24 @@ dsh plugin --profile web add dsh-health-scheduler
 dsh plugin --profile web add ./dsh-health-scheduler-0.1.0.tgz
 ```
 
+### What the bundle contributes
+
+`cordis.patch.yml` inserts one row, `id: health-scheduler`, whose `config` block restates the
+whole `balanced` preset with comments. The layer is applied after every earlier bundle and
+before your own profile's `cordis.patch.yml`, so your overrides win.
+
+**A patch replaces the targeted row's whole `config`; it is not a deep merge.** If you override
+`providerOptions` in your profile patch, copy the entire nested object you want, not just the
+one leaf you are changing. The plugin's own configuration resolution *is* a deep merge over the
+selected preset, so a document you pass to the plugin directly behaves the way you would expect
+— it is the profile patch layer that replaces.
+
+`plugin/manifest.json` describes the same contract in machine-readable form: id, kind, entry
+module, the install command and patch path, required and optional services, the settings
+namespace, the three tool names, the six event names, the action levels this plugin applies
+versus the ones it only requests, and what degrades when `dsh-restart` or worker control is
+absent.
+
 ### Verify before booting
 
 `--dump-config` prints the composed profile tree without booting it. Use it to confirm
@@ -94,7 +113,11 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
-`dsh web` is a hardcoded alias for `--profile web`.
+`dsh web` is a hardcoded alias for `--profile web`. A successful load logs one line:
+
+```text
+health-scheduler: monitoring started (7 providers, interval 15000 ms, preset balanced)
+```
 
 ### The git-install caveat
 
@@ -103,14 +126,14 @@ build until you allow it. When `dsh plugin ... add git+https://…` fails, the C
 exact key pnpm wants; add it under `allowBuilds` in
 `<profile directory>/pnpm-workspace.yaml` and re-run the same command.
 
-This plugin ships `"prepack": "npm run build"`, so:
+This plugin ships `"prepack": "npm run build"` and **`lib/` is gitignored**, so:
 
 - **Installing from npm or a tarball needs no build permission.** The published tarball
-  already contains `lib/`.
-- **Installing from a git URL needs the `allowBuilds` entry**, because `prepare`/`prepack`
-  must run `tsc` before `lib/` exists.
-- **Installing from a local path** behaves like a tarball when `lib/` is already built, and
-  needs a build step otherwise.
+  contains the built `lib/` produced by the `prepack` hook.
+- **Installing from a git URL always needs the `allowBuilds` entry**, because the checkout has
+  no `lib/` and `prepack` must run `tsc` to create it.
+- **Installing from a local path** behaves like a tarball when you have already run
+  `npm run build`, and needs that build otherwise.
 
 ## Quick start
 
@@ -154,7 +177,7 @@ After a boot the plugin logs
 health-scheduler: monitoring started (7 providers, interval 15000 ms, preset balanced)
 ```
 
-and on demand the read-only health report begins like this:
+and on demand the operator (or the model) reads the report, which begins like this:
 
 ```text
 Restart Pressure: 21 / 100
@@ -190,11 +213,11 @@ so snapshots are stable.
 
 ### 3. Rolling windows, not points
 
-Every metric keeps raw samples for `windows.rawMs` (30 minutes by default, raised to the
-longest statistics window if that is longer) and one mean/max/min bucket per
-`windows.aggregateBucketMs` (5 minutes) for `windows.aggregateRetentionMs` (24 hours).
-Statistics are computed over 5 min / 30 min / 2 h / 6 h windows. Memory is bounded by
-construction: the store does not grow with uptime.
+Every metric keeps raw samples for `windows.rawMs` (30 minutes, raised to the longest
+statistics window if that is longer), one mean/max/min bucket per `windows.aggregateBucketMs`
+(5 minutes) retained for `windows.aggregateRetentionMs` (24 hours), and per-day summaries
+retained for `windows.dailyRetentionMs` (14 days). Statistics are computed over 5 min / 30 min
+/ 2 h / 6 h windows. Memory is bounded by construction: the store does not grow with uptime.
 
 ### 4. Trend analysis with a polarity
 
@@ -206,22 +229,22 @@ temperature is worsening and a *falling* `recovery_rate` is too.
 ### 5. Six dimensions, one number
 
 Each metric ramps linearly from its `warn` endpoint (0 points) to its `critical` endpoint
-(100 points); the registry's polarity decides which end is which. A dimension's score blends
-its weighted mean with its **worst** member at `WORST_WEIGHT = 0.5`, so one critical metric
-is not averaged away by five calm ones. The six dimension scores are combined with the
-configured weights.
+(100 points), with the registry's polarity deciding which end is which. A dimension's score
+blends its weighted mean with its **worst** member at `WORST_WEIGHT = 0.5`, so one critical
+metric is not averaged away by five calm ones. The six dimension scores are then combined with
+the configured weights.
 
 ### 6. Missing telemetry is `unknown`, and coverage says so
 
 A dimension with no known metric scores `null` and is listed in `unknownDimensions`. Its
-nominal weight is **renormalized** over the dimensions that do have data, and the
-renormalized share that was actually backed by telemetry is published as `coverage`. A
-pressure reading at 40 % coverage can never be mistaken for a full-confidence one, and every
-decision record carries `coverage_NNpct` in its reason list.
+nominal weight is **renormalized** over the dimensions that do have data, and the renormalized
+share actually backed by telemetry is published as `coverage`. A pressure reading at 40 %
+coverage can never be mistaken for a full-confidence one, and every decision record carries
+`coverage_NNpct` in its reason list.
 
 ### 7. Anti-flapping is not optional
 
-Four independent mechanisms keep the plugin from becoming a source of churn:
+Six independent mechanisms keep the plugin from becoming a source of churn:
 
 | Mechanism | Default | What it stops |
 | --- | --- | --- |
@@ -303,6 +326,9 @@ An unknown metric name throws with the full canonical list in the message.
 }
 ```
 
+`consecutive_ms` is the sustain-gate duration: how long the metric has held its current band.
+The full payload also carries `min`, `earliest` and `median` per window.
+
 ### `health_policy`
 
 Explains the decision policy. Parameters: `action` (`explain` | `config` | `decisions`,
@@ -336,13 +362,19 @@ leaf you omit comes from the preset; arrays replace rather than merge. The plugi
 the settings namespace **`health-scheduler`** when the profile provides a settings service,
 and runs from the bundle patch alone when it does not.
 
+One caveat belongs here rather than in the configuration reference: the *profile patch layer*
+is not a deep merge. A `cordis.patch.yml` row replaces the targeted row's whole `config`, so an
+override that restates only part of a nested object loses the rest. The deep merge described in
+this section applies to the document the plugin actually receives. See
+[What the bundle contributes](#what-the-bundle-contributes).
+
 The complete key-by-key reference, including the stats-file format and the command-probe
 format, is in **[docs/configuration.md](docs/configuration.md)**.
 
 | Group | Keys | Default |
 | --- | --- | --- |
 | Master | `enabled`, `preset` | `true`, `balanced` |
-| `sampling` | `intervalMs`, `trendIntervalMs`, `persistIntervalMs`, `providerBackoffMs`, `providerBackoffMaxMs` | 15 s, 60 s, 300 s, 30 s, 600 s |
+| `sampling` | `intervalMs`, `trendIntervalMs`, `summaryIntervalMs`, `providerBackoffMs`, `providerBackoffMaxMs` | 15 s, 60 s, 300 s, 30 s, 600 s |
 | `windows` | `rawMs`, `windowsMs`, `aggregateBucketMs`, `aggregateRetentionMs`, `dailyRetentionMs` | 30 min, `[5m,30m,2h,6h]`, 5 min, 24 h, 14 d |
 | `trend` | `minSamples`, `minSpanMs`, `minRSquared` | 3, 5 min, 0.5 |
 | `weights` | `time`, `thermal`, `memory`, `runtime`, `worker`, `computer_use_ui` | 0.15 / 0.20 / 0.25 / 0.15 / 0.15 / 0.10 |
@@ -360,23 +392,38 @@ A configuration that cannot be acted on is rejected loudly. `resolveConfig` thro
 `ConfigError` naming the dotted path; the plugin's `apply` catches it, logs it and continues
 on the `balanced` preset rather than failing the boot.
 
+### How much history you get
+
+Three horizons, all bounded, all configurable:
+
+| Horizon | Where | Default | Answers |
+| --- | --- | --- | --- |
+| Raw samples | `windows.rawMs` | 30 min, raised to the longest `windowsMs` entry | Percentiles, slopes, consecutive-band duration. |
+| Aggregate buckets | `windows.aggregateRetentionMs`, `aggregateBucketMs` | 24 h, 5 min buckets | Long-horizon movement without keeping raw points. |
+| Daily summaries | `windows.dailyRetentionMs` | 14 days | "Was last Tuesday worse than today?" — one `{count, mean, max, min}` per metric per local day. |
+
+Daily summaries are rolled up from the aggregate buckets on demand, so their cost is
+proportional to the number of buckets, not to uptime. They are published on every
+`HealthSnapshot` as `dailySummaries` and in the JSON payload as `daily_summaries`, and they are
+frozen at local midnight boundaries so a day is comparable across a DST change.
+
 ## Presets
 
 All three presets start from the same neutral `balanced` document and differ in exactly four
 places. `PRESET_SCALES` in `src/core/presets.ts` is the whole story:
 
 ```ts
-conservative: { enter: 0.85, exit: 0.75, cooldown: 1.5, maintenance: 0.85 }
-balanced:     { enter: 1,    exit: 1,    cooldown: 1,   maintenance: 1 }
-aggressive:   { enter: 1.15, exit: 1.05, cooldown: 0.7, maintenance: 1.3 }
+conservative: { bands: 0.85, cooldown: 1.5, maintenance: 0.85 }
+balanced:     { bands: 1,    cooldown: 1,   maintenance: 1 }
+aggressive:   { bands: 1.15, cooldown: 0.7, maintenance: 1.3 }
 ```
 
-`scalePreset` multiplies every ladder `enter` **and** `exit` by `enter` (the `exit` field of
-the scale object is declared but the code scales both endpoints by the same factor, so
-hysteresis stays proportional), the three cooldowns by `cooldown`, and
-`maxDeferMs` / `minStateDwellMs` / `minRepeatActionMs` by `maintenance`.
-`urgentOverridePressure` is *divided* by the band factor, so a lower-pressure machine treats
-pressure as urgent sooner.
+`scalePreset` multiplies every ladder `enter` **and** `exit` by `bands`, so hysteresis keeps
+its proportion instead of flattening; it multiplies the three cooldowns by `cooldown`; and it
+multiplies `maxDeferMs`, `minStateDwellMs` and `minRepeatActionMs` by `maintenance`.
+`urgentOverridePressure` is *divided* by `bands`, so a lower-pressure machine treats pressure
+as urgent sooner. Scaled thresholds are clamped into `1 … 99`, so no rung can be scaled out of
+reach.
 
 | Field | conservative | balanced | aggressive |
 | --- | --- | --- | --- |
@@ -446,33 +493,34 @@ working PowerShell helper.
 
 Everything below is honestly absent from `0.1.0` rather than partially working.
 
-- **`cordis.patch.yml` is missing from the repository.** `package.json` declares
-  `dsh.bundle.patch: ./cordis.patch.yml` and lists the file in `files`, but the file itself is
-  not checked in. Until it exists, `dsh plugin add` installs the package as a plain dependency
-  and warns that it declares no usable bundle, so the plugin never joins the profile layer
-  stack. The registerable rows themselves (`name`, `inject`, `apply`, the `health-scheduler`
-  settings namespace, the three tools) are all implemented.
-- **`scripts/verify-artifacts.mjs` does not exist**, so `npm run verify:artifacts` fails.
-- **`npm run presets` does not exist.** `scripts/generate-presets.mjs` works
-  (`node scripts/generate-presets.mjs`, or `--check`), and the four generated files are
-  currently up to date, but the npm alias documented in `presets/README.md` was never added to
-  `package.json`.
 - **The `./startup` subpath export points at files that are not built.** `package.json` exports
-  `./startup` as `./lib/startup.js`; there is no `src/startup.ts`, so that subpath cannot
-  resolve. Nothing in the package imports it.
-- **No UI page.** The design's Health page is not implemented. All of its data is present in
-  `metricsSnapshot()` / `HealthSnapshot`, but no client plugin renders it.
-- **No daily summary rollup and no long-horizon trend read.** `windows.dailyRetentionMs` is
-  validated and never read, and `TrendAnalyzer` fits raw points only, so a horizon longer than
-  `windows.rawMs` returns no samples. The 24 hours of aggregates are retained but unused.
-- **Four configuration keys are accepted and ignored**: `sampling.persistIntervalMs`,
-  `resilience.reportDegradedCapability`, `providerOptions.computerUse.probeOnTick` and
-  `providerOptions.computerUse.probeTimeoutMs`. They validate, they appear in the resolved
-  config and in `health_policy config`, and they change nothing.
-- **`providerOptions.memory.extraPids` is a note, not an implementation.** It is counted into a
-  sample note but does not add any process to the RSS sum.
+  `./startup` as `./lib/startup.js` with `./lib/types/startup.d.ts`; there is no `src/startup.ts`,
+  so that subpath cannot resolve. Nothing imports it and the bundle patch does not use it, so the
+  practical effect is a dead export rather than a broken install.
+- **No UI page.** Every field the design's Health page needs — pressure, the per-dimension table,
+  per-metric values, maintenance, readiness, capabilities, provider status, trends, recent
+  decisions and the daily summaries — is in `HealthSnapshot` and in the `metricsSnapshot()` JSON,
+  but no client plugin renders it.
+- **Aggregates are rolled up per day but never fitted.** `RollingStore.dailySummaries()` and
+  `windows.dailyRetentionMs` work, so "was last Tuesday worse than today?" is answerable. What is
+  missing is a *trend* read over that horizon: `TrendAnalyzer` fits raw points only, so a horizon
+  longer than `windows.rawMs` returns no samples despite 24 hours of retained aggregates.
+- **`providerOptions.memory.extraPids` covers the launcher tree, not just this process.** The sum is
+  refreshed in the background from the platform process list, so a leak in a separately-launched
+  worker shows up in `process_rss_bytes` too.
+- **Long-horizon trends are fitted from aggregate buckets.** When the requested horizon reaches
+  further back than `windows.rawMs`, `TrendAnalyzer` fits the retained bucket means instead of raw
+  samples, and the trend summary names the series it used (`aggregate buckets`). A 24-hour leak is
+  therefore visible on a machine whose raw horizon is 6 hours.
 - **The Long-Run test tier is not implemented.** The design asks for 6 h / 12 h synthetic and a
-  24 h real-machine soak; the repository has unit and synthetic-scenario tests only.
+  24 h real-machine soak; the repository has unit, plugin, scheduler and synthetic-scenario tests
+  only. The 30-minute, 120-evaluation decision-storm bound is the closest thing to it.
+- **`git_operations_per_minute` has no consumer.** It is collected, carried in the `time`
+  dimension and weighted `0.5`, but with no band and no trend term it contributes nothing, and
+  nothing yet uses it as a safe-point busy signal.
+- **`escalation_requested_at_maximum_pressure` is a statement of condition, not of history.** The
+  engine has no channel through which a previous application restart could report its outcome, so
+  the reason names what the pressure is doing rather than claiming a prior restart failed.
 
 ## Documentation index
 
@@ -491,12 +539,13 @@ Everything below is honestly absent from `0.1.0` rather than partially working.
 ## Development
 
 ```sh
-npm install            # dev dependencies only; the plugin has no runtime dependencies
-npm run build          # tsc -p tsconfig.json -> lib/
-npm test               # npm run build && node --test tests/*.test.js
-npm run test:only      # node --test tests/*.test.js, against the existing lib/
-npm run typecheck      # tsc -p tsconfig.json --noEmit
-npm run verify:artifacts   # broken: script not yet written (see Roadmap)
+npm install                # dev dependencies only; the plugin has no runtime dependencies
+npm run build              # tsc -p tsconfig.json -> lib/
+npm test                   # npm run build && node --test tests/*.test.js
+npm run test:only          # node --test tests/*.test.js, against the existing lib/
+npm run typecheck          # tsc -p tsconfig.json --noEmit
+npm run presets            # regenerate presets/*.json from lib/
+npm run verify:artifacts   # assert the built artifacts and the presets are coherent
 ```
 
 TypeScript settings worth knowing: `strict`, `noUncheckedIndexedAccess`,
@@ -504,12 +553,21 @@ TypeScript settings worth knowing: `strict`, `noUncheckedIndexedAccess`,
 `module: NodeNext`. The engine (`src/core`, `src/types`, `src/providers`, `src/adapters`,
 `src/audit`) has **no dependency on the harness**; only `src/dsh/` knows about Cordis, and it
 does so through the narrow structural interfaces in `src/dsh/context.ts`. That is what makes
-the whole engine testable without a runtime. The suite is 87 tests across 6 files and passes as
-committed:
+the whole engine testable without a runtime. The suite is 148 tests across 8 files and passes
+as committed:
 
 ```sh
 node --test tests/*.test.js
-# tests 87 / suites 16 / pass 87 / fail 0
+# tests 148 / suites 27 / pass 148 / fail 0
+```
+
+```sh
+node scripts/generate-presets.mjs --check
+# ok   presets/balanced.json matches PRESETS.balanced
+# ok   presets/conservative.json matches PRESETS.conservative
+# ok   presets/aggressive.json matches PRESETS.aggressive
+# ok   presets/schema.json matches the configuration schema
+# ok   4 generated files are up to date
 ```
 
 ## FAQ

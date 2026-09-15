@@ -19,13 +19,24 @@ Configuration is a **partial document**. It is deep-merged onto the preset named
 
 Three places, in increasing precedence:
 
-1. **The bundle patch row** — the `config:` block of the plugin's row in a
-   `cordis.patch.yml`.
+1. **The bundle patch row** — the `config:` block of the plugin's row in
+   [`cordis.patch.yml`](../cordis.patch.yml). **A patch replaces the targeted row's whole
+   `config`; it does not deep-merge keys.** An override that restates only part of a nested
+   object loses the rest, so copy the whole nested object you want to change.
 2. **The `health-scheduler` settings namespace** — registered when the profile provides a
    settings service. `scope.watch` calls `resolveConfig` on every change and calls
-   `scheduler.reconfigure`, so settings changes apply **live**: history and policy state are
-   preserved and provider backoff windows are reset.
+   `scheduler.reconfigure`, so settings changes apply **live**: history, the policy state and the
+   daily rollup are preserved and provider backoff windows are reset.
 3. **Direct library use** — `resolveConfig(overrides)` / `createScheduler({ config, … })`.
+
+The merge described in the rest of this document applies to the document the plugin receives
+(steps 2 and 3, and whatever the row's `config` ends up being). `deepMerge` merges objects
+deeply, replaces arrays, and treats `null` as a value rather than a delete.
+
+One casing trap to be aware of: `resolveConfig` reads `trend.minRSquared` with a capital `S`,
+while the shipped `cordis.patch.yml` spells it `minRsquared`. An unrecognised leaf is simply
+ignored rather than rejected, so the patch behaves correctly (the default `0.5` applies) but that
+particular line does nothing. Use the exact spelling from the table below.
 
 A document that cannot be acted on is rejected loudly. `resolveConfig` throws a `ConfigError`
 whose message is `health-scheduler config: <dotted.path> <explanation>`. The plugin's `apply`
@@ -48,8 +59,8 @@ A whole-document JSON Schema is generated at
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `intervalMs` | number > 0 | `15000` (15 s) | Milliseconds between scheduler ticks. The timer is `unref()`ed, so it never keeps the process alive on its own. |
-| `trendIntervalMs` | number > 0 | `60000` (60 s) | Compared against the time since the last trend evaluation and used to advance `lastTrendAt`. **No behaviour depends on it today**: `tick()` evaluates trends on every tick and only updates the timestamp. |
-| `persistIntervalMs` | number > 0 | `300000` (5 min) | **Accepted and ignored.** Nothing reads it; the decision log appends synchronously on every applied action. |
+| `trendIntervalMs` | number > 0 | `60000` (60 s) | How often the full trend sweep runs. Between sweeps the snapshot reuses the previous trend list, so a 15 s tick does not refit every metric 4×/min. |
+| `summaryIntervalMs` | number > 0 | `300000` (5 min) | How often the per-day summary is re-folded for a snapshot. The fold reads aggregate buckets, not raw samples, so this is a memoisation window rather than a retention setting. |
 | `providerBackoffMs` | number ≥ 0 | `30000` (30 s) | Base of the provider circuit-breaker backoff. `0` disables the delay (the failure counter still increments). |
 | `providerBackoffMaxMs` | number > 0 | `600000` (10 min) | Ceiling of the exponential backoff. |
 
@@ -67,10 +78,40 @@ The backoff schedule is
 | `windowsMs` | non-empty, strictly ascending array of numbers > 0 | `[300000, 1800000, 7200000, 21600000]` (5 min, 30 min, 2 h, 6 h) | Windows for which `WindowStats` are computed and which `health_history` reports. |
 | `aggregateBucketMs` | number > 0 | `300000` (5 min) | Bucket size for the long-horizon mean/max/min series. |
 | `aggregateRetentionMs` | number > 0 | `86400000` (24 h) | How long buckets are kept. |
-| `dailyRetentionMs` | number > 0 | `1209600000` (14 days) | **Accepted and ignored.** There is no daily summary rollup in `0.1.0`, so nothing consumes this value. |
+| `dailyRetentionMs` | number > 0 | `1209600000` (14 days) | Horizon for the per-day rollup. Buckets older than this are excluded from `dailySummaries()`, so this is what bounds the "was last Tuesday worse than today?" answer. |
 
 Memory is bounded by construction: raw points are pruned to `rawMs` on every write and buckets
 to `aggregateRetentionMs`, so the store does not grow with uptime.
+
+### Daily summaries
+
+`RollingStore.dailySummaries(nowMs)` folds the retained aggregate buckets into one summary per
+**local calendar day**, per metric:
+
+```ts
+interface DailySummary {
+  dayStart: string                     // ISO-8601 of local midnight
+  metrics: readonly {
+    metric: CanonicalMetric
+    count: number                      // total samples behind the day
+    mean: number                       // weighted by sample count, not a mean of means
+    max: number
+    min: number
+  }[]
+}
+```
+
+Three properties are worth knowing:
+
+- **Means combine by sample count**, so a quiet hour cannot outvote a busy one.
+- **Cost is proportional to the number of buckets, not to uptime.** Nothing is recomputed from
+  raw samples; there are no raw samples that old.
+- **Days are local calendar days**, so a day is comparable across a DST change; a 23- or
+  25-hour day is still one day.
+
+The result is published on every `HealthSnapshot` as `dailySummaries()` and in the JSON payload
+as `daily_summaries`. It is the only long-horizon answer the plugin offers today: there is no
+*trend* fit over the aggregate series, because `TrendAnalyzer` reads raw points only.
 
 > **The trend horizon is the longest `windowsMs` entry.** `PressureEngine` and the scheduler
 > both pass `windowsMs[windowsMs.length - 1]` as the trend look-back, and `TrendAnalyzer` fits
@@ -214,7 +255,6 @@ The six phases and the exact conditions are in
 | --- | --- | --- | --- |
 | `providerFailureLimit` | number > 0 | `3` | Consecutive failures before the exponential backoff starts. Truncated and raised to at least `1`. |
 | `providerRetryAfterBackoff` | boolean | `true` | When `false`, a provider is never retried after its first failure: `isAvailable` returns `false` while `consecutiveFailures > 0`. |
-| `reportDegradedCapability` | boolean | `true` | **Accepted and ignored.** Capability state is always reported from the adapter's own `capability` field. |
 
 ## `storage`
 
@@ -260,7 +300,7 @@ the native and the helper path.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `extraPids` | array of integers ≥ 0 | `[]` | **A note, not an implementation.** When non-empty, the sample's `note` says `process tree RSS includes N configured extra pid(s)`; no process is actually added to the RSS sum. |
+| `extraPids` | array of integers ≥ 0 | `[]` | Additional pids added to `process_rss_bytes`, so the leak signal covers the whole launcher tree rather than this process alone. The sum is refreshed in the background from the platform process list (`tasklist` on Windows, `ps` elsewhere) every `2 × sampling.intervalMs`; a query that fails leaves only this process in the sum and says so in the sample note. |
 
 The memory provider has **no helper option of its own**: `applyHealthScheduler` passes
 `config.providerOptions.hardware.helperCommand` and `helperTimeoutMs` into the memory provider,
@@ -280,8 +320,6 @@ which is what makes a frozen UI visible.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `probeOnTick` | boolean | `false` | **Accepted and ignored.** No computer-use probe exists; the provider is stats-file driven. |
-| `probeTimeoutMs` | number > 0 | `2000` | **Accepted and ignored**, for the same reason. |
 
 ### `providerOptions.statsFile`
 

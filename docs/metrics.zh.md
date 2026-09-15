@@ -117,8 +117,8 @@ Provider id **`runtime`**（`src/providers/runtime.ts`）。八个指标中有�
 
 ## Worker（与 context）
 
-Provider id **`workers`** 与 **`context`**（`src/providers/stats-driven.ts`）。十一个指标的
-压力维度全部为 **`worker`**。
+Provider id **`workers`** 与 **`context`**（`src/providers/stats-driven.ts`）。十一个指标中有
+十个的压力维度是 **`worker`**；**`git_operations_per_minute` 被分派到 `time`**，不是 `worker`。
 
 | 指标 | 单位 | 极性 | 硬边界 | 默认 band | 持续时间 | 趋势 | 指标权重 |
 | --- | --- | --- | --- | --- | --- | --- | --- |

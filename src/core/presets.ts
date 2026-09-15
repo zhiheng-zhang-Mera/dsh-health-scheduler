@@ -94,7 +94,7 @@ export const BALANCED_PRESET: HealthSchedulerConfig = Object.freeze({
   sampling: {
     intervalMs: 15_000,
     trendIntervalMs: 60_000,
-    persistIntervalMs: 300_000,
+    summaryIntervalMs: 300_000,
     providerBackoffMs: 30_000,
     providerBackoffMaxMs: 600_000,
   },
@@ -178,7 +178,6 @@ export const BALANCED_PRESET: HealthSchedulerConfig = Object.freeze({
     hardware: { ignoreMetrics: [], helperCommand: null, helperTimeoutMs: 5_000 },
     memory: { extraPids: [] },
     runtime: { heartbeatFile: null, heartbeatExpectedMs: 15_000 },
-    computerUse: { probeOnTick: false, probeTimeoutMs: 2_000 },
     statsFile: { paths: [], staleAfterMs: 120_000, commands: [] },
   },
 })

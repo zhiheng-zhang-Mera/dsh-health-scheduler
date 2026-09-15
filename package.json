@@ -34,10 +34,6 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./startup": {
-      "types": "./lib/types/startup.d.ts",
-      "default": "./lib/startup.js"
-    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },

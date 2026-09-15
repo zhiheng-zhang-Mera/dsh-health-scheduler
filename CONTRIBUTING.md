@@ -12,31 +12,32 @@ npm run build            # tsc -p tsconfig.json -> lib/
 npm test                 # npm run build && node --test tests/*.test.js
 npm run test:only        # node --test tests/*.test.js, against the existing lib/
 npm run typecheck        # tsc -p tsconfig.json --noEmit
+npm run presets          # regenerate presets/*.json from lib/
+npm run verify:artifacts # assert the built artifacts, the registry and the presets are coherent
 ```
 
 Requirements: Node `>= 20.11.0` and TypeScript `^5.7`. The tests import from `lib/`, not from
 `src/`, so `npm test` builds first and `npm run test:only` is the fast loop once you have built
-once.
+once. `npm run verify:artifacts` is cheap and is worth running before a commit that touches
+`src/types/metrics.ts`, `src/core/presets.ts` or the package entry.
 
-The committed suite is 87 tests across six files:
+The committed suite is 148 tests across eight files:
 
 ```sh
 node --test tests/*.test.js
-# tests 87 / suites 16 / pass 87 / fail 0
+# tests 148 / suites 27 / pass 148 / fail 0
 ```
-
-`npm run verify:artifacts` currently fails because `scripts/verify-artifacts.mjs` has not been
-written. Do not add a script that pretends to verify something.
 
 ### Regenerating the preset documents
 
 ```sh
-node scripts/generate-presets.mjs           # rewrite presets/*.json and presets/schema.json
-node scripts/generate-presets.mjs --check    # verify they are current; exits non-zero when stale
+npm run presets                              # rewrite presets/*.json and presets/schema.json
+node scripts/generate-presets.mjs --check     # verify they are current; exits non-zero when stale
 ```
 
-`presets/README.md` documents an `npm run presets` alias that does not exist in `package.json`.
-Either add the alias or fix the README; do not leave the two disagreeing.
+Both the script and the npm alias exist. If you change a preset, a default or the metric
+registry, regenerate the documents in the same commit — `--check` fails otherwise, and the
+checked-in JSON is what an operator diffs.
 
 ## The rules that are not negotiable
 
@@ -100,6 +101,12 @@ The plugin answers "is the system degrading, and what should happen next?" — n
 keeps a bounded decision log and bounded rolling history. It does not add per-sample
 persistence, an export pipeline, a metrics endpoint, a dashboard backend or an unbounded cache.
 New disk writes need a bounded size in `storage` and a documented rotation or retention rule.
+
+When you add a new horizon, add it to the three that already exist rather than inventing a
+fourth store: raw samples (`windows.rawMs`), aggregate buckets
+(`windows.aggregateRetentionMs`) and daily summaries (`windows.dailyRetentionMs`). Every one of
+them is bounded by a duration, and none of them grows with uptime. If your feature needs a
+fourth, say in the pull request why the existing three cannot carry it.
 
 ## Adding a provider
 

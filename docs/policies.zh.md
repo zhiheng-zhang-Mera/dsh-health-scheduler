@@ -414,14 +414,14 @@ if (!picture.windowOpen && picture.phase === 'outside_window' && (this.deferredS
 | `restart_capability_unavailable` | — |
 | `system_reboot_requires_restart_adapter` | — |
 | `escalation_overrides_safe_point` | — |
-| `escalation_from_repeated_app_restart_failure` | 无条件附加到每个第 4 级候选 |
+| `escalation_requested_at_maximum_pressure` | 无条件附加到每个第 4 级候选 |
 | `uptime_pressure` | 一个 driver code，不是理由前缀，但列在测试词表中 |
 | driver code | 前三个 driver code 会被追加到每个 `pressure_*` 候选 |
 
 `coverage_NNpct` 会被追加到**每一条**决策，因此消费者永远能知道决策当下模型的多少部分是被真正
 测量过的。
 
-`escalation_from_repeated_app_restart_failure` 值得单独指出：它被无条件附加到每个第 4 级候选，
+`escalation_requested_at_maximum_pressure` 值得单独指出：它被无条件附加到每个第 4 级候选，
 但引擎中没有任何东西真的去验证此前有一次应用重启失败过。`0.1.0` 里既没有升级计数器，也没有重启
 结果的反馈回路 —— 升级纯粹是因为压力越过了第 4 级进入阈值。这个理由字符串夸大了引擎所知道的
 信息量。
