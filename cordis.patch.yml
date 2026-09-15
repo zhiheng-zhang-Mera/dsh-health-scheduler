@@ -1,0 +1,158 @@
+# The dsh-health-scheduler bundle patch.
+#
+# A bundle patch is the layer this package contributes to a profile's composed
+# configuration. `dsh plugin --profile <name> add <this package>` appends
+# `dsh-health-scheduler` to `dsh.profile.bundles`, and this file is then applied
+# after every earlier bundle and before the user's own `cordis.patch.yml`.
+#
+# The row below inserts one plugin. Its `config` is the plugin's configuration
+# document; every leaf is optional, and anything omitted falls back to the
+# `balanced` preset. Users override these values in their profile's
+# `cordis.patch.yml` (or through the `health-scheduler` settings namespace in the
+# Web UI) without touching this file.
+#
+# A patch replaces a row's whole `config`, it does not deep-merge keys, so an
+# override that restates only part of a nested object loses the rest. Copy the
+# full nested object you want to change.
+
+- insert:
+    - id: health-scheduler
+      name: 'dsh-health-scheduler'
+      config:
+        # Master switch. `true` starts the sampling loop; the plugin still loads
+        # and answers tool calls when this is `false`.
+        enabled: true
+
+        # `conservative` acts earliest, `balanced` is the default, `aggressive`
+        # waits longest. `custom` means "use this document as written".
+        preset: balanced
+
+        sampling:
+          # How often providers are sampled. This is the plugin's only periodic
+          # cost, and it is deliberately coarse: health is a trend, not a signal.
+          intervalMs: 15000
+          trendIntervalMs: 60000
+          persistIntervalMs: 300000
+          providerBackoffMs: 30000
+          providerBackoffMaxMs: 600000
+
+        # Rolling statistics windows. The effective raw retention is the larger
+        # of `rawMs` and the longest window.
+        windows:
+          rawMs: 1800000
+          windowsMs: [300000, 1800000, 7200000, 21600000]
+          aggregateBucketMs: 300000
+          aggregateRetentionMs: 86400000
+          dailyRetentionMs: 1209600000
+
+        # Only samples beyond these gates are trusted as a slope.
+        trend:
+          minSamples: 3
+          minSpanMs: 300000
+          minRsquared: 0.5
+
+        # Restart-pressure weights. They are renormalized over whichever
+        # dimensions actually produced telemetry, and the renormalized share is
+        # published as `coverage`.
+        weights:
+          time: 0.15
+          thermal: 0.2
+          memory: 0.25
+          runtime: 0.15
+          worker: 0.15
+          computer_use_ui: 0.1
+
+        # The action ladder, with hysteresis. `enter` raises a level, `exit`
+        # releases it, and `exit < enter` is required. Values are only defaults.
+        thresholds:
+          throttle:
+            enter: 55
+            exit: 45
+          pause_new_work:
+            enter: 70
+            exit: 60
+          request_app_restart:
+            enter: 80
+            exit: 68
+          request_system_reboot:
+            enter: 95
+            exit: 85
+
+        # Self-imposed pacing. The restart plugin enforces its own cooldowns on
+        # top of these; this plugin enforces only its own.
+        cooldowns:
+          throttleMs: 300000
+          maintenanceMs: 1800000
+          escalationMs: 3600000
+
+        throttle:
+          # `null` means "do not set a limit unless one can be derived from the
+          # observed worker count"; see `concurrencyFactor`.
+          concurrencyLimit: null
+          concurrencyFactor: 0.5
+
+        # Scheduled maintenance is off by default: a target time only becomes a
+        # restart request when it is combined with pressure and a safe point.
+        maintenance:
+          enabled: false
+          targetTime: '04:00'
+          windowStart: '03:30'
+          windowEnd: '05:00'
+          maxDeferMs: 3600000
+          urgentOverridePressure: 92
+          allowAppRestart: true
+          safePointRequired: true
+
+        # Anti-flapping and decision-storm protection.
+        antiFlap:
+          minStateDwellMs: 120000
+          minRepeatActionMs: 600000
+          debounceEvaluations: 2
+
+        # Failure isolation.
+        resilience:
+          providerFailureLimit: 3
+          providerRetryAfterBackoff: true
+          reportDegradedCapability: true
+
+        # Bounded health history. This plugin is not an observability platform.
+        storage:
+          enabled: true
+          directory: null
+          maxLogBytes: 4194304
+          maxRecentDecisions: 50
+
+        # Providers to disable, e.g. ["hardware"] on a machine with no sensors.
+        disabledProviders: []
+
+        providerOptions:
+          hardware:
+            # Thermal telemetry is not available natively. Point this at a helper
+            # that prints canonical `metric=value` lines, for example:
+            #
+            #   helperCommand: ['powershell', '-NoProfile', '-Command',
+            #     "(Get-CimInstance -Namespace root/LibreHardwareMonitor -Class Sensor |
+            #       Where-Object { $_.Name -eq 'GPU Core' } |
+            #       Select-Object -First 1).Value | ForEach-Object { \"gpu_temp_c=$_\" }"]
+            #
+            helperCommand: null
+            helperTimeoutMs: 5000
+            ignoreMetrics: []
+          memory:
+            extraPids: []
+          runtime:
+            # A file the host touches on every event-loop turn; its age becomes
+            # `heartbeat_delay_ms`.
+            heartbeatFile: null
+            heartbeatExpectedMs: 15000
+          computerUse:
+            probeOnTick: false
+            probeTimeoutMs: 2000
+
+          # Files or commands that carry worker, Computer Use and UI telemetry.
+          # Format: a JSON object whose `metrics` keys are canonical metric names,
+          # or `name=value` lines on a command's stdout.
+          statsFile:
+            paths: []
+            staleAfterMs: 120000
+            commands: []

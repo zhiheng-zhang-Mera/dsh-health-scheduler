@@ -1,0 +1,72 @@
+{
+  "$schema": "./manifest.schema.json",
+  "id": "dsh-health-scheduler",
+  "name": "Health Scheduler",
+  "name_zh": "健康调度器",
+  "version": "0.1.0",
+  "kind": "bundle",
+  "summary": "Device and runtime health monitoring, restart-pressure scoring, maintenance scheduling and action decisions for DeepSeek Harness.",
+  "summary_zh": "面向 DeepSeek Harness 的设备与运行时健康监控、重启压力评分、维护调度与动作决策。",
+  "positioning": {
+    "does": [
+      "collect health telemetry through providers",
+      "normalize and window the readings",
+      "score restart pressure 0-100 across six dimensions",
+      "decide NO_ACTION / THROTTLE / PAUSE_NEW_WORK / REQUEST_APP_RESTART / REQUEST_SYSTEM_REBOOT",
+      "gate restart requests on the maintenance window and the safe point",
+      "audit every applied action with its drivers and reason codes"
+    ],
+    "doesNot": [
+      "kill or restart any process",
+      "reboot the machine",
+      "modify task queues or task state",
+      "decide when a restart is safe on its own"
+    ]
+  },
+  "entry": {
+    "module": "lib/index.js",
+    "types": "lib/types/index.d.ts",
+    "exports": ["apply", "name", "inject"]
+  },
+  "install": {
+    "manager": "dsh plugin",
+    "command": "dsh plugin --profile web add dsh-health-scheduler",
+    "patch": "./cordis.patch.yml",
+    "rowId": "health-scheduler"
+  },
+  "requires": {
+    "node": ">=20.11.0",
+    "dsh": ">=0.1.1-rc.1",
+    "services": ["tools"],
+    "optionalServices": ["settings"],
+    "optionalPlugins": ["dsh-restart"]
+  },
+  "provides": {
+    "services": [],
+    "settingsNamespaces": ["health-scheduler"],
+    "tools": ["health_status", "health_history", "health_policy"],
+    "events": ["decision", "provider-failure", "pressure", "maintenance", "violation", "error"],
+    "safePointRegistry": true
+  },
+  "actions": {
+    "levels": ["NO_ACTION", "THROTTLE", "PAUSE_NEW_WORK", "REQUEST_APP_RESTART", "REQUEST_SYSTEM_REBOOT"],
+    "appliedByThisPlugin": ["THROTTLE", "PAUSE_NEW_WORK"],
+    "requestedFromDshRestart": ["REQUEST_APP_RESTART", "REQUEST_SYSTEM_REBOOT"]
+  },
+  "degradation": {
+    "restartPluginAbsent": "monitoring and mitigation continue; restart requests are reported as capability unavailable",
+    "workerControlAbsent": "monitoring continues; THROTTLE and PAUSE_NEW_WORK are recorded but not applied",
+    "providerFailure": "the provider backs off exponentially; every other provider keeps sampling",
+    "telemetryAbsent": "the affected dimension is reported as unknown and its weight is redistributed; unknown is never scored as healthy"
+  },
+  "docs": {
+    "readme": "README.md",
+    "readmeZh": "README.zh.md",
+    "metrics": "docs/metrics.md",
+    "pressureModel": "docs/pressure-model.md",
+    "policies": "docs/policies.md",
+    "configuration": "docs/configuration.md",
+    "acceptance": "docs/acceptance.md"
+  },
+  "license": "MIT"
+}

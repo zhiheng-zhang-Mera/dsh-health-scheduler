@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output. `lib/` is generated from `src/` by `npm run build` and by the
+# `prepack` hook, so it is intentionally not tracked. Consumers installing from
+# npm or from a tarball receive the built directory inside the package.
+lib/
+
+# Logs and local scratch state
+*.log
+npm-debug.log*
+.npm/
+.cache/
+tmp/
+temp/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# The plugin's own runtime state when a developer points `storage.directory`
+# at the checkout instead of the default under $DSH_HOME.
+health-scheduler/
+decisions.jsonl
+decisions.jsonl.*.bak

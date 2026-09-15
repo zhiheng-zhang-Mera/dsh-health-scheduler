@@ -1,0 +1,20 @@
+# Normalize line endings in the repository so a Windows checkout and a Linux
+# checkout produce the same bytes for the files that matter.
+* text=auto eol=lf
+
+# Windows-only helper scripts must keep CRLF so cmd.exe and PowerShell parse them
+# correctly.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+
+# Generated, but diffable enough to keep in review
+package-lock.json text eol=lf -diff linguist-generated
+presets/*.json text eol=lf linguist-generated

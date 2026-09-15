@@ -1,0 +1,676 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dsh-health-scheduler configuration",
+  "description": "A plugin configuration document. It is a partial override: it is deep-merged onto the selected preset, and every leaf it omits is taken from that preset (balanced when \"preset\" is absent). Objects and bands are closed here (additionalProperties: false) because unknown keys and half-specified bands are almost always typos; the runtime validator rejects them too. The constraints stated per field are the ones resolveConfig in src/core/config.ts enforces.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Master switch. When false the plugin loads but collects nothing. Defaults to true."
+    },
+    "preset": {
+      "type": "string",
+      "enum": [
+        "conservative",
+        "balanced",
+        "aggressive",
+        "custom"
+      ],
+      "description": "Selects the shipped preset the document is based on. Explicit values always win over the preset. An unrecognised name falls back to balanced at runtime, so it is not accepted here."
+    },
+    "sampling": {
+      "$ref": "#/$defs/SamplingConfig"
+    },
+    "windows": {
+      "$ref": "#/$defs/WindowConfig"
+    },
+    "trend": {
+      "$ref": "#/$defs/TrendConfig"
+    },
+    "weights": {
+      "$ref": "#/$defs/PressureWeights"
+    },
+    "thresholds": {
+      "$ref": "#/$defs/ActionThresholds"
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Per-metric scoring overrides keyed by canonical metric name. Keys must come from the canonical registry; resolveConfig rejects any other name and lists the known ones.",
+      "propertyNames": {
+        "enum": [
+          "abnormal_exit_rate",
+          "action_latency_ms",
+          "active_workers",
+          "blank_frame_rate",
+          "commit_used_ratio",
+          "cpu_temp_c",
+          "cpu_usage",
+          "desktop_responsiveness_ms",
+          "event_loop_latency_ms",
+          "failure_rate",
+          "frontend_error_rate",
+          "git_operations_per_minute",
+          "gpu_temp_c",
+          "gpu_usage",
+          "handle_count",
+          "heartbeat_delay_ms",
+          "ipc_timeout_rate",
+          "main_window_heartbeat_ms",
+          "missed_target_rate",
+          "power_limit_hit",
+          "process_private_bytes",
+          "process_rss_bytes",
+          "queue_delay_ms",
+          "queued_tasks",
+          "ram_available_bytes",
+          "ram_total_bytes",
+          "ram_used_ratio",
+          "recovery_rate",
+          "render_latency_ms",
+          "restart_count",
+          "retry_rate",
+          "screenshot_latency_ms",
+          "spawn_failure_rate",
+          "task_failure_rate",
+          "task_latency_ms",
+          "thermal_throttle",
+          "thread_count",
+          "timeout_rate",
+          "uptime_seconds",
+          "verification_retry_rate",
+          "vram_used_ratio",
+          "worker_process_count"
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/MetricConfig"
+      }
+    },
+    "cooldowns": {
+      "$ref": "#/$defs/CooldownConfig"
+    },
+    "throttle": {
+      "$ref": "#/$defs/ThrottleConfig"
+    },
+    "maintenance": {
+      "$ref": "#/$defs/MaintenanceConfig"
+    },
+    "antiFlap": {
+      "$ref": "#/$defs/AntiFlapConfig"
+    },
+    "resilience": {
+      "$ref": "#/$defs/ResilienceConfig"
+    },
+    "storage": {
+      "$ref": "#/$defs/StorageConfig"
+    },
+    "disabledProviders": {
+      "type": "array",
+      "description": "Provider ids to disable, e.g. [\"hardware\"] on a machine with no sensors. Every entry must be a non-empty string; entries are trimmed by the resolver.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "providerOptions": {
+      "$ref": "#/$defs/ProviderOptions"
+    }
+  },
+  "$defs": {
+    "HysteresisBand": {
+      "title": "HysteresisBand",
+      "description": "An enter/exit pair. Hysteresis requires exit < enter, which resolveConfig enforces: a band with exit >= enter is rejected.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enter",
+        "exit"
+      ],
+      "properties": {
+        "enter": {
+          "type": "number",
+          "description": "Pressure at or above which the level is entered."
+        },
+        "exit": {
+          "type": "number",
+          "description": "Pressure at or below which the level is left again; must be strictly below \"enter\"."
+        }
+      }
+    },
+    "MetricBand": {
+      "title": "MetricBand",
+      "description": "Where one metric's pressure ramp starts and saturates. warn and critical must differ. For a lower-is-worse metric (ram_available_bytes, recovery_rate) \"warn\" is the higher of the two numbers.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warn",
+        "critical"
+      ],
+      "properties": {
+        "warn": {
+          "type": "number",
+          "description": "Value at which this metric starts contributing pressure."
+        },
+        "critical": {
+          "type": "number",
+          "description": "Value at which this metric contributes a full 100."
+        }
+      }
+    },
+    "MetricConfig": {
+      "title": "MetricConfig",
+      "description": "Per-metric overrides. A metric without a \"band\" is still collected and its trend term still applies, but it is never scored against a threshold.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "band": {
+          "$ref": "#/$defs/MetricBand"
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Weight of this metric inside its dimension; defaults to 1."
+        },
+        "sustainMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Milliseconds the metric must stay in a band before its level counts. Must be >= 0."
+        },
+        "trendPointsPerHour": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Points added per hour of upward trend, capped by trendCap. Must be >= 0."
+        },
+        "trendCap": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum trend contribution for this metric; defaults to 25. Must be >= 0."
+        }
+      }
+    },
+    "SamplingConfig": {
+      "title": "SamplingConfig",
+      "description": "Provider collection cadence, in milliseconds.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intervalMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Milliseconds between scheduler ticks. Must be > 0."
+        },
+        "trendIntervalMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Milliseconds between trend evaluations. Must be > 0."
+        },
+        "persistIntervalMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Milliseconds between persistence flushes. Must be > 0."
+        },
+        "providerBackoffMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Backoff applied after the first provider failure. Must be >= 0."
+        },
+        "providerBackoffMaxMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Upper bound of the exponential provider backoff. Must be > 0."
+        }
+      }
+    },
+    "WindowConfig": {
+      "title": "WindowConfig",
+      "description": "Rolling window definitions, in milliseconds.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rawMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Minimum retention horizon for raw samples. Must be > 0. The effective retention is max(rawMs, longest statistics window), so a longer window is always fully backed by samples."
+        },
+        "windowsMs": {
+          "type": "array",
+          "minItems": 1,
+          "x-strictly-ascending": true,
+          "description": "Windows kept for statistics. Must be a non-empty array of strictly ascending positive numbers: resolveConfig rejects an empty array, a non-positive entry, or a repeat/lower value.",
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "aggregateBucketMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Aggregated bucket size for long-horizon history. Must be > 0."
+        },
+        "aggregateRetentionMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "How long aggregates are retained; defaults to 24 h. Must be > 0."
+        },
+        "dailyRetentionMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "How long daily summaries are retained; defaults to 14 days. Must be > 0."
+        }
+      }
+    },
+    "TrendConfig": {
+      "title": "TrendConfig",
+      "description": "Memory- and trend-specific tuning.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Minimum samples before a slope is reported at all. Must be > 0; the resolver truncates fractions and raises anything below 2 to 2."
+        },
+        "minSpanMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum span before a slope is reported. Must be >= 0."
+        },
+        "minRSquared": {
+          "type": "number",
+          "description": "Minimum R^2 for a slope to be trusted as a trend. Must be a finite number."
+        }
+      }
+    },
+    "PressureWeights": {
+      "title": "PressureWeights",
+      "description": "The six dimension weights of the restart-pressure model. Every value must be a finite number >= 0 and the six values together must have a positive total, which resolveConfig enforces.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "time": {
+          "type": "number",
+          "minimum": 0
+        },
+        "thermal": {
+          "type": "number",
+          "minimum": 0
+        },
+        "memory": {
+          "type": "number",
+          "minimum": 0
+        },
+        "runtime": {
+          "type": "number",
+          "minimum": 0
+        },
+        "worker": {
+          "type": "number",
+          "minimum": 0
+        },
+        "computer_use_ui": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "ActionThresholds": {
+      "title": "ActionThresholds",
+      "description": "Action ladder thresholds with hysteresis. Two ladder rules are enforced by resolveConfig: each \"enter\" must be strictly above the previous rung's \"enter\", and each \"exit\" must not fall below the previous rung's \"exit\".",
+      "type": "object",
+      "additionalProperties": false,
+      "x-enter-strictly-increasing": true,
+      "properties": {
+        "throttle": {
+          "$ref": "#/$defs/HysteresisBand"
+        },
+        "pause_new_work": {
+          "$ref": "#/$defs/HysteresisBand"
+        },
+        "request_app_restart": {
+          "$ref": "#/$defs/HysteresisBand"
+        },
+        "request_system_reboot": {
+          "$ref": "#/$defs/HysteresisBand"
+        }
+      }
+    },
+    "CooldownConfig": {
+      "title": "CooldownConfig",
+      "description": "Self-imposed cooldowns, in milliseconds. Each value must be >= 0.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "throttleMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maintenanceMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "escalationMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "ThrottleConfig": {
+      "title": "ThrottleConfig",
+      "description": "What the THROTTLE action actually asks for.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "concurrencyLimit": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0,
+          "description": "Worker concurrency the THROTTLE action asks the harness to adopt. null leaves the harness limit in place and only pauses new admission. A number must be > 0; the resolver truncates fractions and raises anything below 1 to 1."
+        },
+        "concurrencyFactor": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Fraction by which the observed active worker count is reduced when concurrencyLimit is null. Must be > 0; the resolver clamps it into the 0.05..1 range."
+        }
+      }
+    },
+    "MaintenanceConfig": {
+      "title": "MaintenanceConfig",
+      "description": "Maintenance window configuration.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether scheduled maintenance is armed at all."
+        },
+        "targetTime": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "description": "Local wall-clock target, \"HH:MM\", 24-hour."
+        },
+        "windowStart": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "description": "Local wall-clock start of the allowed window, \"HH:MM\", 24-hour."
+        },
+        "windowEnd": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "description": "Local wall-clock end of the allowed window, \"HH:MM\", 24-hour."
+        },
+        "maxDeferMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum deferral past the target, in milliseconds. Must be >= 0."
+        },
+        "urgentOverridePressure": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Pressure at or above which the window is ignored and maintenance becomes urgent. null disables the override; a number must be finite."
+        },
+        "allowAppRestart": {
+          "type": "boolean",
+          "description": "Whether a maintenance restart request may be raised at all."
+        },
+        "safePointRequired": {
+          "type": "boolean",
+          "description": "Whether a reported safe point is required before a restart request is raised."
+        }
+      }
+    },
+    "AntiFlapConfig": {
+      "title": "AntiFlapConfig",
+      "description": "Anti-flapping and re-request configuration.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minStateDwellMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum time in a state before another transition is allowed. Must be >= 0."
+        },
+        "minRepeatActionMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum time between two identical applied actions. Must be >= 0."
+        },
+        "debounceEvaluations": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Consecutive evaluations a condition must hold before it is actionable; 1 disables debounce. Must be > 0; the resolver truncates fractions and raises anything below 1 to 1."
+        }
+      }
+    },
+    "ResilienceConfig": {
+      "title": "ResilienceConfig",
+      "description": "Failure isolation and adapter tuning.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "providerFailureLimit": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Consecutive provider failures before the provider is disabled temporarily. Must be > 0; the resolver truncates fractions and raises anything below 1 to 1."
+        },
+        "providerRetryAfterBackoff": {
+          "type": "boolean",
+          "description": "Whether a failing provider is retried after a backoff."
+        },
+        "reportDegradedCapability": {
+          "type": "boolean",
+          "description": "Whether an unavailable action adapter marks its capability degraded."
+        }
+      }
+    },
+    "StorageConfig": {
+      "title": "StorageConfig",
+      "description": "Persistence bounds.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether anything is written to disk."
+        },
+        "directory": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Directory override; null means <DSH_HOME>/health-scheduler."
+        },
+        "maxLogBytes": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Maximum bytes of the rolling JSONL decision log. Must be > 0."
+        },
+        "maxRecentDecisions": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Maximum decision records kept in memory for the UI. Must be > 0; the resolver truncates fractions and raises anything below 1 to 1."
+        }
+      }
+    },
+    "ProviderOptions": {
+      "title": "ProviderOptions",
+      "description": "Per-provider options for the built-in providers.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hardware": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ignoreMetrics": {
+              "type": "array",
+              "description": "Metric names treated as unavailable even when a sensor exists.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "abnormal_exit_rate",
+                  "action_latency_ms",
+                  "active_workers",
+                  "blank_frame_rate",
+                  "commit_used_ratio",
+                  "cpu_temp_c",
+                  "cpu_usage",
+                  "desktop_responsiveness_ms",
+                  "event_loop_latency_ms",
+                  "failure_rate",
+                  "frontend_error_rate",
+                  "git_operations_per_minute",
+                  "gpu_temp_c",
+                  "gpu_usage",
+                  "handle_count",
+                  "heartbeat_delay_ms",
+                  "ipc_timeout_rate",
+                  "main_window_heartbeat_ms",
+                  "missed_target_rate",
+                  "power_limit_hit",
+                  "process_private_bytes",
+                  "process_rss_bytes",
+                  "queue_delay_ms",
+                  "queued_tasks",
+                  "ram_available_bytes",
+                  "ram_total_bytes",
+                  "ram_used_ratio",
+                  "recovery_rate",
+                  "render_latency_ms",
+                  "restart_count",
+                  "retry_rate",
+                  "screenshot_latency_ms",
+                  "spawn_failure_rate",
+                  "task_failure_rate",
+                  "task_latency_ms",
+                  "thermal_throttle",
+                  "thread_count",
+                  "timeout_rate",
+                  "uptime_seconds",
+                  "verification_retry_rate",
+                  "vram_used_ratio",
+                  "worker_process_count"
+                ]
+              }
+            },
+            "helperCommand": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "description": "Thermal-zone paths to read on Linux, or a Windows helper executable that prints \"name,value\" lines on stdout. null disables the helper.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "helperTimeoutMs": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Milliseconds a helper command may run before it is abandoned. Must be > 0."
+            }
+          }
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "extraPids": {
+              "type": "array",
+              "description": "Process ids to include in the process-tree memory sums.",
+              "items": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "heartbeatFile": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Heartbeat file the host writes on every event-loop turn; null disables the heartbeat_delay_ms reading."
+            },
+            "heartbeatExpectedMs": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Expected heartbeat cadence, in milliseconds. Must be > 0."
+            }
+          }
+        },
+        "computerUse": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "probeOnTick": {
+              "type": "boolean",
+              "description": "Whether the probe runs on the plugin's own tick."
+            },
+            "probeTimeoutMs": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Milliseconds a probe may take before it counts as a stall. Must be > 0."
+            }
+          }
+        },
+        "statsFile": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "description": "Paths the host or an integration writes canonical metrics into, newest write wins. Each entry must be a non-empty string.",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "staleAfterMs": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Milliseconds after which a file's contents are treated as stale. Must be > 0."
+            },
+            "commands": {
+              "type": "array",
+              "description": "Extra command probes: \"name,value\" lines on stdout mapped to canonical metrics.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "argv"
+                ],
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Command and arguments, executed without a shell. Must be non-empty.",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "timeoutMs": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Milliseconds the command may run before it is abandoned. Defaults to 5000."
+                  },
+                  "format": {
+                    "const": "name-value",
+                    "description": "Output format; only \"name-value\" is supported and it is forced by the resolver."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

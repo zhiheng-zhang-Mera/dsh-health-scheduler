@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dsh-health-scheduler.invalid/plugin/manifest.schema.json",
+  "title": "dsh-health-scheduler plugin manifest",
+  "description": "Descriptive metadata for humans and plugin catalogues. The Cordis loader does not read this file; it uses package.json and cordis.patch.yml. The schema exists so an ecosystem index can validate a submission before accepting it.",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "version",
+    "kind",
+    "summary",
+    "entry",
+    "install",
+    "requires",
+    "provides",
+    "actions",
+    "license"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "name_zh": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+" },
+    "kind": { "const": "bundle" },
+    "summary": { "type": "string", "minLength": 1 },
+    "summary_zh": { "type": "string", "minLength": 1 },
+    "positioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "does": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "doesNot": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["module", "exports"],
+      "additionalProperties": false,
+      "properties": {
+        "module": { "type": "string" },
+        "types": { "type": "string" },
+        "exports": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "install": {
+      "type": "object",
+      "required": ["manager", "command", "patch", "rowId"],
+      "additionalProperties": false,
+      "properties": {
+        "manager": { "const": "dsh plugin" },
+        "command": { "type": "string" },
+        "patch": { "type": "string" },
+        "rowId": { "type": "string" }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "required": ["node", "dsh", "services"],
+      "additionalProperties": false,
+      "properties": {
+        "node": { "type": "string" },
+        "dsh": { "type": "string" },
+        "services": { "type": "array", "items": { "type": "string" } },
+        "optionalServices": { "type": "array", "items": { "type": "string" } },
+        "optionalPlugins": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "services": { "type": "array", "items": { "type": "string" } },
+        "settingsNamespaces": { "type": "array", "items": { "type": "string" } },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "events": { "type": "array", "items": { "type": "string" } },
+        "safePointRegistry": { "type": "boolean" }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "required": ["levels", "appliedByThisPlugin", "requestedFromDshRestart"],
+      "additionalProperties": false,
+      "properties": {
+        "levels": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "appliedByThisPlugin": { "type": "array", "items": { "type": "string" } },
+        "requestedFromDshRestart": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "degradation": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "docs": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "license": { "type": "string" }
+  }
+}
